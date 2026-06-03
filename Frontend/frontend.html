@@ -1,0 +1,562 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Movers Transport System</title>
+    <link rel="stylesheet" href="frontend_styles.css">
+</head>
+<body>
+    <section class="auth-screen" id="authScreen">
+        <section class="auth-panel">
+            <div class="brand auth-brand">
+                <span class="brand-mark">MT</span>
+                <div>
+                    <h1>Movers Transport</h1>
+                    <p>Choose your access point</p>
+                </div>
+            </div>
+
+            <div class="segmented-control auth-mode" role="tablist" aria-label="Authentication mode">
+                <label>
+                    <input type="radio" name="authMode" value="login" checked>
+                    <span>Log in</span>
+                </label>
+                <label>
+                    <input type="radio" name="authMode" value="signup">
+                    <span>Farmer signup</span>
+                </label>
+            </div>
+
+            <form class="auth-form" id="loginForm">
+                <label>
+                    Role
+                    <select id="roleInput" required>
+                        <option value="system_admin">System admin</option>
+                        <option value="ops_manager">Operations manager</option>
+                        <option value="accountant">Accountant</option>
+                        <option value="hr_manager">HR manager</option>
+                        <option value="driver">Driver</option>
+                        <option value="farmer">Farmer customer</option>
+                    </select>
+                </label>
+                <label>
+                    Username
+                    <input id="usernameInput" type="text" autocomplete="username" required placeholder="admin">
+                </label>
+                <label>
+                    Password
+                    <input id="passwordInput" type="password" autocomplete="current-password" required placeholder="password">
+                </label>
+
+                <div id="loginMessage" class="form-message" aria-live="polite"></div>
+                <button class="primary-button full-width" type="submit"><span>→</span> Sign in</button>
+            </form>
+
+            <form class="auth-form auth-hidden" id="farmerSignupForm">
+                <div class="field-row">
+                    <label>
+                        First name
+                        <input id="signupFirstName" type="text" autocomplete="given-name" required placeholder="Amina">
+                    </label>
+                    <label>
+                        Last name
+                        <input id="signupLastName" type="text" autocomplete="family-name" required placeholder="Mensah">
+                    </label>
+                </div>
+                <label>
+                    Phone
+                    <input id="signupPhone" type="tel" autocomplete="tel" required placeholder="555-0107">
+                </label>
+                <label>
+                    Address
+                    <input id="signupAddress" type="text" autocomplete="street-address" required placeholder="Farm road or plot number">
+                </label>
+                <label>
+                    Farmer type
+                    <select id="signupFarmerType" required>
+                        <option value="large_scale">Large scale</option>
+                        <option value="small_scale">Small scale</option>
+                    </select>
+                </label>
+                <label>
+                    Username
+                    <input id="signupUsername" type="text" autocomplete="username" required placeholder="farmer.amina">
+                </label>
+                <label>
+                    Password
+                    <input id="signupPassword" type="password" autocomplete="new-password" minlength="6" required placeholder="At least 6 characters">
+                </label>
+                <div id="signupMessage" class="form-message" aria-live="polite"></div>
+                <button class="primary-button full-width" type="submit"><span>+</span> Create farmer account</button>
+            </form>
+        </section>
+    </section>
+
+    <div class="app-shell auth-hidden" id="appShell">
+        <aside class="sidebar" aria-label="Main navigation">
+            <div class="brand">
+                <span class="brand-mark">MT</span>
+                <div>
+                    <h1>Movers Transport</h1>
+                    <p>Operations console</p>
+                </div>
+            </div>
+
+            <nav class="nav-tabs" aria-label="Workspace sections">
+                <button class="nav-tab active" data-view="dashboard" type="button">Dashboard</button>
+                <button class="nav-tab" data-view="trips" type="button">Trips</button>
+                <button class="nav-tab" data-view="fleet" type="button">Fleet</button>
+                <button class="nav-tab" data-view="farmers" type="button">Farmers</button>
+                <button class="nav-tab" data-view="discipline" type="button">Discipline</button>
+            </nav>
+
+            <div class="sidebar-note">
+                <span class="status-dot"></span>
+                <span id="sidebarRole">Not signed in</span>
+            </div>
+        </aside>
+
+        <main class="workspace">
+            <header class="topbar">
+                <div>
+                    <p class="eyebrow">CS 61 database project</p>
+                    <h2 id="viewTitle">Dashboard</h2>
+                </div>
+                <div class="topbar-actions">
+                    <button class="icon-button" id="logoutButton" type="button" title="Sign out" aria-label="Sign out">L</button>
+                    <button class="icon-button" id="seedButton" type="button" title="Reload sample data" aria-label="Reload sample data">R</button>
+                    <button class="primary-button" data-open-trip type="button"><span>+</span> New trip</button>
+                </div>
+            </header>
+
+            <section class="view active" id="dashboardView" data-title="Dashboard">
+                <div class="driver-portal auth-hidden" id="driverPortal">
+                    <section class="panel">
+                        <div class="panel-header">
+                            <h3>My driver profile</h3>
+                            <span class="muted-label">Driver account</span>
+                        </div>
+                        <div id="driverProfileCard" class="profile-grid"></div>
+                    </section>
+
+                    <section class="panel">
+                        <div class="panel-header">
+                            <h3>Assigned vehicle</h3>
+                            <span class="muted-label">Current assignment</span>
+                        </div>
+                        <div id="driverVehicleCard" class="stack-list"></div>
+                    </section>
+
+                    <section class="panel">
+                        <div class="panel-header">
+                            <h3>My trips</h3>
+                            <span class="muted-label" id="driverTripSummary"></span>
+                        </div>
+                        <div id="driverTripList" class="stack-list"></div>
+                    </section>
+
+                    <section class="panel auth-hidden" id="driverTripDetailPanel">
+                        <div class="panel-header">
+                            <h3>Trip details</h3>
+                            <span class="muted-label">Selected assignment</span>
+                        </div>
+                        <div id="driverTripDetail" class="detail-panel"></div>
+                    </section>
+
+                    <section class="panel">
+                        <div class="panel-header">
+                            <h3>Discipline</h3>
+                            <span class="muted-label" id="driverDisciplineSummary"></span>
+                        </div>
+                        <div id="driverDisciplineList" class="stack-list"></div>
+                    </section>
+
+                    <form class="panel form-panel" id="serviceRecordForm">
+                        <div class="panel-header">
+                            <h3>Record maintenance</h3>
+                            <span class="muted-label">Assigned vehicle only</span>
+                        </div>
+                        <label>
+                            Vehicle
+                            <select id="serviceVehicleSelect" required></select>
+                        </label>
+                        <label>
+                            Related trip
+                            <select id="serviceTripSelect"></select>
+                        </label>
+                        <label>
+                            Description
+                            <input id="serviceDescriptionInput" type="text" required placeholder="Post-trip inspection">
+                        </label>
+                        <label>
+                            Cost
+                            <input id="serviceCostInput" type="number" min="0" step="0.01" value="0" required>
+                        </label>
+                        <div id="serviceMessage" class="form-message" aria-live="polite"></div>
+                        <button class="primary-button full-width" type="submit"><span>+</span> Save maintenance</button>
+                    </form>
+                </div>
+
+                <div class="hr-dashboard auth-hidden" id="hrDashboard">
+                    <div class="metric-grid" id="hrMetricGrid"></div>
+                    <div class="split-layout">
+                        <div class="panel-stack">
+                            <section class="panel">
+                                <div class="panel-header">
+                                    <h3>Driver status</h3>
+                                    <span class="muted-label">Click for history</span>
+                                </div>
+                                <div id="hrDriverList" class="stack-list"></div>
+                            </section>
+
+                            <section class="panel auth-hidden" id="hrDriverDetailPanel">
+                                <div class="panel-header">
+                                    <h3>Driver details</h3>
+                                    <span class="muted-label">Offence history</span>
+                                </div>
+                                <div id="hrDriverDetail" class="detail-panel"></div>
+                            </section>
+                        </div>
+
+                        <div class="panel-stack">
+                            <section class="panel">
+                                <div class="panel-header">
+                                    <h3>Discipline activity</h3>
+                                    <span class="muted-label" id="hrOffenceSummary"></span>
+                                </div>
+                                <div id="hrOffenceList" class="stack-list scroll-list"></div>
+                            </section>
+
+                            <section class="panel">
+                                <div class="panel-header">
+                                    <h3>Trip reviews</h3>
+                                    <span class="muted-label" id="hrReviewSummary"></span>
+                                </div>
+                                <div id="hrReviewList" class="stack-list scroll-list"></div>
+                            </section>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="defaultDashboard">
+                    <div class="metric-grid" id="metricGrid"></div>
+
+                    <div class="split-layout">
+                        <section class="panel">
+                            <div class="panel-header">
+                                <h3>Trip manifest</h3>
+                                <select id="tripStatusFilter" aria-label="Filter trips by status">
+                                    <option value="all">All trips</option>
+                                    <option value="scheduled">Scheduled</option>
+                                    <option value="in_transit">In transit</option>
+                                    <option value="completed">Completed</option>
+                                    <option value="cancelled">Cancelled</option>
+                                </select>
+                            </div>
+                            <div class="table-wrap">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Trip</th>
+                                            <th>Customer</th>
+                                            <th>Driver</th>
+                                            <th>Route</th>
+                                            <th>Status</th>
+                                            <th>Total</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="tripTable"></tbody>
+                                </table>
+                            </div>
+                        </section>
+
+                        <section class="panel">
+                            <div class="panel-header">
+                                <h3>Rule checks</h3>
+                                <span class="muted-label">Frontend mirrors API checks</span>
+                            </div>
+                            <div id="ruleList" class="rule-list"></div>
+                        </section>
+                    </div>
+                </div>
+            </section>
+
+            <section class="view" id="tripsView" data-title="Trips">
+                <div class="form-grid">
+                    <form class="panel form-panel" id="tripForm">
+                        <div class="panel-header">
+                            <h3>Create trip request</h3>
+                            <span class="muted-label">Cost and tax calculate automatically</span>
+                        </div>
+
+                        <div class="segmented-control" role="radiogroup" aria-label="Customer source">
+                            <label>
+                                <input type="radio" name="customerType" value="farmer" checked>
+                                <span>Farmer</span>
+                            </label>
+                            <label>
+                                <input type="radio" name="customerType" value="group">
+                                <span>Group</span>
+                            </label>
+                        </div>
+
+                        <div class="field-row">
+                            <label>
+                                Customer
+                                <select id="customerSelect" required></select>
+                            </label>
+                            <label>
+                                Trip date
+                                <input id="tripDate" type="date" required>
+                            </label>
+                        </div>
+
+                        <div class="field-row">
+                            <label>
+                                Origin
+                                <input id="originInput" type="text" required placeholder="North Valley Farm">
+                            </label>
+                            <label>
+                                Destination
+                                <input id="destinationInput" type="text" required placeholder="Central Market">
+                            </label>
+                        </div>
+
+                        <div class="field-row">
+                            <label>
+                                Cargo
+                                <input id="cargoInput" type="text" required placeholder="Tomatoes">
+                            </label>
+                            <label>
+                                Load weight
+                                <input id="weightInput" type="number" min="1" step="0.01" required>
+                            </label>
+                        </div>
+
+                        <div class="field-row">
+                            <label>
+                                Distance km
+                                <input id="distanceInput" type="number" min="1" step="0.01" required>
+                            </label>
+                            <label>
+                                Base rate
+                                <input id="rateInput" type="number" min="0" step="0.01" readonly required>
+                            </label>
+                        </div>
+
+                        <div class="field-row">
+                            <label>
+                                Vehicle
+                                <select id="vehicleSelect" required></select>
+                            </label>
+                            <label>
+                                Driver
+                                <select id="driverSelect" required></select>
+                            </label>
+                        </div>
+
+                        <label>
+                            Loaders
+                            <select id="loaderSelect" multiple size="3"></select>
+                        </label>
+
+                        <div class="cost-preview" aria-live="polite">
+                            <div>
+                                <span>Transport</span>
+                                <strong id="transportPreview">$0.00</strong>
+                            </div>
+                            <div>
+                                <span>Tax</span>
+                                <strong id="taxPreview">$0.00</strong>
+                            </div>
+                            <div>
+                                <span>Total</span>
+                                <strong id="totalPreview">$0.00</strong>
+                            </div>
+                        </div>
+
+                        <div id="tripFormMessage" class="form-message" aria-live="polite"></div>
+                        <button class="primary-button full-width" type="submit"><span>+</span> Schedule trip</button>
+                    </form>
+
+                    <section class="panel">
+                        <div class="panel-header">
+                            <h3>Upcoming workload</h3>
+                            <span class="muted-label" id="workloadCount"></span>
+                        </div>
+                        <div id="workloadList" class="stack-list"></div>
+                    </section>
+                </div>
+
+                <section class="panel auth-hidden" id="tripDetailPanel">
+                    <div class="panel-header">
+                        <h3>Trip details</h3>
+                        <span class="muted-label">Selected trip</span>
+                    </div>
+                    <div id="tripDetail" class="detail-panel"></div>
+                </section>
+            </section>
+
+            <section class="view" id="fleetView" data-title="Fleet">
+                <div class="panel">
+                    <div class="panel-header">
+                        <h3>Vehicles</h3>
+                        <label class="inline-filter">
+                            Minimum load
+                            <input id="capacityFilter" type="number" min="0" step="100" value="1000">
+                        </label>
+                    </div>
+                    <div id="vehicleGrid" class="fleet-grid"></div>
+                </div>
+
+                <div class="split-layout payroll-panel auth-hidden" id="payrollPanel">
+                    <section class="panel">
+                        <div class="panel-header">
+                            <h3>Driver pay</h3>
+                            <span class="muted-label">Salary rates and trip assignments</span>
+                        </div>
+                        <div id="driverPayList" class="stack-list"></div>
+                    </section>
+
+                    <section class="panel">
+                        <div class="panel-header">
+                            <h3>Loader pay</h3>
+                            <span class="muted-label">Rates and trip payments</span>
+                        </div>
+                        <div id="loaderPayList" class="stack-list"></div>
+                    </section>
+                </div>
+            </section>
+
+            <section class="view" id="farmersView" data-title="Farmers">
+                <div class="farmer-portal auth-hidden" id="farmerPortal">
+                    <section class="panel">
+                        <div class="panel-header">
+                            <h3>My profile</h3>
+                            <span class="muted-label">Farmer account</span>
+                        </div>
+                        <div id="farmerProfileCard" class="profile-grid"></div>
+                    </section>
+
+                    <section class="panel">
+                        <div class="panel-header">
+                            <h3>My payments</h3>
+                            <span class="muted-label" id="farmerPaymentSummary"></span>
+                        </div>
+                        <div id="farmerPaymentList" class="stack-list"></div>
+                    </section>
+
+                    <section class="panel">
+                        <div class="panel-header">
+                            <h3>My trip requests</h3>
+                            <button class="primary-button" data-open-trip type="button"><span>+</span> Request trip</button>
+                        </div>
+                        <div id="farmerTripList" class="stack-list"></div>
+                    </section>
+
+                    <form class="panel form-panel" id="tripReviewForm">
+                        <div class="panel-header">
+                            <h3>Review a past trip</h3>
+                            <span class="muted-label">Driver or loader</span>
+                        </div>
+                        <label>
+                            Trip
+                            <select id="reviewTripSelect" required></select>
+                        </label>
+                        <div class="field-row">
+                            <label>
+                                Review target
+                                <select id="reviewTargetType" required>
+                                    <option value="driver">Driver</option>
+                                    <option value="loader">Loader</option>
+                                </select>
+                            </label>
+                            <label>
+                                Loader
+                                <select id="reviewLoaderSelect"></select>
+                            </label>
+                        </div>
+                        <label>
+                            Rating
+                            <select id="reviewRatingSelect" required>
+                                <option value="5">5 - Excellent</option>
+                                <option value="4">4 - Good</option>
+                                <option value="3">3 - Fair</option>
+                                <option value="2">2 - Poor</option>
+                                <option value="1">1 - Very poor</option>
+                            </select>
+                        </label>
+                        <label>
+                            Comment
+                            <input id="reviewCommentInput" type="text" maxlength="500" placeholder="Optional note">
+                        </label>
+                        <div id="reviewMessage" class="form-message" aria-live="polite"></div>
+                        <button class="primary-button full-width" type="submit"><span>+</span> Submit review</button>
+                    </form>
+
+                    <section class="panel">
+                        <div class="panel-header">
+                            <h3>My reviews</h3>
+                            <span class="muted-label" id="farmerReviewSummary"></span>
+                        </div>
+                        <div id="farmerReviewList" class="stack-list"></div>
+                    </section>
+                </div>
+
+                <div class="split-layout" id="customerDirectory">
+                    <section class="panel">
+                        <div class="panel-header">
+                            <h3>Farmers</h3>
+                            <span class="muted-label">Individual customers</span>
+                        </div>
+                        <div id="farmerList" class="stack-list"></div>
+                    </section>
+                    <section class="panel">
+                        <div class="panel-header">
+                            <h3>Groups</h3>
+                            <span class="muted-label">5 members needed for trip requests</span>
+                        </div>
+                        <div id="groupList" class="stack-list"></div>
+                    </section>
+                </div>
+            </section>
+
+            <section class="view" id="disciplineView" data-title="Discipline">
+                <div class="split-layout">
+                    <section class="panel">
+                        <div class="panel-header">
+                            <h3>Driver summary</h3>
+                            <span class="muted-label">Matches DriverDisciplineSummary</span>
+                        </div>
+                        <div id="disciplineList" class="stack-list"></div>
+                    </section>
+
+                    <form class="panel form-panel" id="offenceForm">
+                        <div class="panel-header">
+                            <h3>Record offence</h3>
+                            <span class="muted-label">Third surcharge creates a warning</span>
+                        </div>
+                        <label>
+                            Driver
+                            <select id="offenceDriverSelect"></select>
+                        </label>
+                        <label>
+                            Type
+                            <input id="offenceTypeInput" type="text" required placeholder="Late departure">
+                        </label>
+                        <label>
+                            Surcharge
+                            <input id="surchargeInput" type="number" min="0" step="0.01" value="0">
+                        </label>
+                        <div id="offenceMessage" class="form-message" aria-live="polite"></div>
+                        <button class="primary-button full-width" type="submit"><span>!</span> Save offence</button>
+                    </form>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script src="frontend_app.js"></script>
+</body>
+</html>
