@@ -11,7 +11,7 @@ const seedState = () => ({
         { id: 6, name: "Peter Moyo", phone: "555-0106", address: "Riverbend Plot 11", type: "small_scale" }
     ],
     groups: [
-        { id: 1, name: "Riverbend Growers", region: "North Region", members: [2, 3, 4, 5, 6] }
+        { id: 1, name: "Riverbend Growers", region: "North Region", members: [2, 3, 4, 5, 6], chairId: 2, memberRoles: { "2": "chair", "3": "member", "4": "member", "5": "member", "6": "member" } }
     ],
     drivers: [
         { id: 1, name: "Daniel Kofi", phone: "555-0201", status: "active", salaryRate: 28.00 },
@@ -53,6 +53,7 @@ const seedState = () => ({
             destination: "Central Market",
             distanceKm: 42.5,
             tripDate: "2026-02-01",
+            deliveryDate: "2026-02-02",
             cargoType: "Tomatoes",
             loadWeight: 800,
             baseRate: 0.75,
@@ -66,10 +67,12 @@ const seedState = () => ({
             driverId: 2,
             farmerId: null,
             groupId: 1,
+            requestedByFarmerId: 2,
             origin: "Riverbend Cooperative Store",
             destination: "Metro Retail Depot",
             distanceKm: 88,
             tripDate: "2026-02-03",
+            deliveryDate: "2026-02-04",
             cargoType: "Fertilizer bags",
             loadWeight: 4500,
             baseRate: 0.75,
@@ -97,7 +100,20 @@ let selectedDriverTripId = null;
 let selectedHrDriverId = null;
 
 const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
-const today = "2026-05-26";
+const toDateInputValue = (date) => {
+    const localDate = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+    return localDate.toISOString().slice(0, 10);
+};
+const today = toDateInputValue(new Date());
+const addDays = (value, days) => {
+    const date = new Date(`${value}T00:00:00`);
+    date.setDate(date.getDate() + days);
+    return toDateInputValue(date);
+};
+const minimumPickupDate = () => addDays(today, 3);
+const tripDateRange = (trip) => trip.deliveryDate && trip.deliveryDate !== trip.tripDate
+    ? `${trip.tripDate} to ${trip.deliveryDate}`
+    : trip.tripDate;
 
 const el = (id) => document.getElementById(id);
 
@@ -281,6 +297,8 @@ const getLoaderName = (id) => byId(state.loaders, id)?.name || "Unknown loader";
 const getVehicle = (id) => byId(state.vehicles, id);
 const isPastTrip = (trip) => trip.status === "completed" || trip.tripDate <= today;
 const tripLoadersText = (trip) => trip.loaders.map(getLoaderName).join(", ") || "No loaders assigned";
+const groupChairId = (group) => Number(group?.chairId || Object.entries(group?.memberRoles || {}).find(([, role]) => role === "chair")?.[0] || 0);
+const farmerChairedGroups = () => state.groups.filter((group) => groupChairId(group) === currentUser?.farmerId);
 
 const setMessage = (node, text, tone = "") => {
     node.className = `form-message ${tone}`.trim();
@@ -499,7 +517,7 @@ const renderDriverPortal = () => {
         <button class="list-item list-button ${selectedDriverTripId === trip.id ? "selected" : ""}" data-driver-trip-id="${trip.id}" type="button">
                 <div>
                     <strong>#${trip.id} ${trip.origin} to ${trip.destination}</strong>
-                    <p>${getCustomerName(trip)} - ${trip.tripDate}</p>
+                    <p>${getCustomerName(trip)} - ${tripDateRange(trip)}</p>
                     <p>${trip.cargoType}, ${trip.loadWeight.toLocaleString()} kg</p>
                 </div>
             <span class="badge">${statusText(trip.status)}</span>
@@ -559,7 +577,8 @@ const renderDriverTripDetail = () => {
     el("driverTripDetail").innerHTML = `
         <div class="profile-grid compact">
             <div class="profile-field"><span>Route</span><strong>${trip.origin} to ${trip.destination}</strong></div>
-            <div class="profile-field"><span>Date</span><strong>${trip.tripDate}</strong></div>
+            <div class="profile-field"><span>Pickup</span><strong>${trip.tripDate}</strong></div>
+            <div class="profile-field"><span>Delivery</span><strong>${trip.deliveryDate || trip.tripDate}</strong></div>
             <div class="profile-field"><span>Cargo</span><strong>${trip.cargoType}</strong></div>
             <div class="profile-field"><span>Load</span><strong>${trip.loadWeight.toLocaleString()} kg</strong></div>
             <div class="profile-field"><span>Vehicle</span><strong>${vehicle ? vehicle.plate : "Unassigned"}</strong></div>
@@ -596,7 +615,7 @@ const renderTripTable = () => {
         const costs = tripCost(trip);
         return `
             <tr data-trip-id="${trip.id}">
-                <td>#${trip.id}<br><span class="muted-label">${trip.tripDate}</span></td>
+                <td>#${trip.id}<br><span class="muted-label">${tripDateRange(trip)}</span></td>
                 <td>${getCustomerName(trip)}</td>
                 <td>${getDriverName(trip.driverId)}</td>
                 <td>${trip.origin}<br><span class="muted-label">${trip.destination}</span></td>
@@ -633,14 +652,30 @@ const renderRules = () => {
 
 const renderTripFormOptions = () => {
     const farmerAccount = currentUser?.role === "farmer";
+    const farmerProfile = byId(state.farmers, currentUser?.farmerId);
+    const chairGroups = farmerAccount ? farmerChairedGroups() : [];
+    const farmerRadio = document.querySelector("[name='customerType'][value='farmer']");
+    const groupRadio = document.querySelector("[name='customerType'][value='group']");
     if (farmerAccount) {
-        document.querySelector("[name='customerType'][value='farmer']").checked = true;
+        farmerRadio.disabled = farmerProfile?.type !== "large_scale";
+        groupRadio.disabled = chairGroups.length === 0;
+        if (farmerRadio.disabled && !groupRadio.disabled) {
+            groupRadio.checked = true;
+        } else if (!farmerRadio.disabled && groupRadio.disabled) {
+            farmerRadio.checked = true;
+        } else if (farmerRadio.disabled && groupRadio.disabled) {
+            farmerRadio.checked = true;
+        }
+    } else {
+        farmerRadio.disabled = false;
+        groupRadio.disabled = false;
     }
-    document.querySelector("[name='customerType'][value='group']").disabled = farmerAccount;
 
     const customerType = document.querySelector("[name='customerType']:checked").value;
     const customers = farmerAccount
-        ? state.farmers.filter((farmer) => farmer.id === currentUser.farmerId)
+        ? customerType === "farmer"
+            ? state.farmers.filter((farmer) => farmer.id === currentUser.farmerId && farmer.type === "large_scale")
+            : chairGroups
         : customerType === "farmer"
         ? state.farmers.filter((farmer) => farmer.type === "large_scale")
         : state.groups;
@@ -675,7 +710,7 @@ const renderWorkload = () => {
                     <p>${trip.origin} to ${trip.destination}</p>
                     <p>${trip.loadWeight.toLocaleString()} kg on ${vehicle ? vehicle.plate : "unassigned vehicle"}</p>
                 </div>
-                <span class="badge">${trip.tripDate}</span>
+                <span class="badge">${tripDateRange(trip)}</span>
             </button>
         `;
     }).join("");
@@ -691,7 +726,8 @@ const tripDetailMarkup = (trip) => {
             <div class="profile-field"><span>Customer</span><strong>${getCustomerName(trip)}</strong></div>
             <div class="profile-field"><span>Status</span><strong>${statusText(trip.status)}</strong></div>
             <div class="profile-field"><span>Route</span><strong>${trip.origin} to ${trip.destination}</strong></div>
-            <div class="profile-field"><span>Date</span><strong>${trip.tripDate}</strong></div>
+            <div class="profile-field"><span>Pickup</span><strong>${trip.tripDate}</strong></div>
+            <div class="profile-field"><span>Delivery</span><strong>${trip.deliveryDate || trip.tripDate}</strong></div>
             <div class="profile-field"><span>Cargo</span><strong>${trip.cargoType}</strong></div>
             <div class="profile-field"><span>Load</span><strong>${trip.loadWeight.toLocaleString()} kg</strong></div>
             <div class="profile-field"><span>Driver</span><strong>${getDriverName(trip.driverId)}</strong></div>
@@ -905,7 +941,7 @@ const renderFarmerPortal = () => {
             <button class="list-item list-button ${selectedTripId === trip.id ? "selected" : ""}" data-trip-id="${trip.id}" type="button">
                 <div>
                     <strong>#${trip.id} ${trip.origin} to ${trip.destination}</strong>
-                    <p>${trip.tripDate} - ${trip.cargoType}, ${trip.loadWeight.toLocaleString()} kg</p>
+                    <p>${tripDateRange(trip)} - ${trip.cargoType}, ${trip.loadWeight.toLocaleString()} kg</p>
                     <p>${getDriverName(trip.driverId)} - ${money.format(costs.total)}</p>
                 </div>
                 <span class="badge">${statusText(trip.status)}</span>
@@ -919,7 +955,7 @@ const renderFarmerPortal = () => {
 
 const renderReviewFormOptions = (trips) => {
     const reviewableTrips = trips.filter(isPastTrip);
-    renderOptions(el("reviewTripSelect"), reviewableTrips, (trip) => `#${trip.id} ${trip.cargoType} - ${trip.tripDate}`);
+    renderOptions(el("reviewTripSelect"), reviewableTrips, (trip) => `#${trip.id} ${trip.cargoType} - ${tripDateRange(trip)}`);
     const selectedTrip = byId(reviewableTrips, el("reviewTripSelect").value) || reviewableTrips[0];
     const targetType = el("reviewTargetType").value;
     el("reviewLoaderSelect").disabled = targetType !== "loader";
@@ -989,14 +1025,42 @@ const updateCostPreview = () => {
     el("totalPreview").textContent = money.format(costs.total);
 };
 
+const setDefaultTripDates = () => {
+    const pickupDate = minimumPickupDate();
+    const deliveryDate = addDays(pickupDate, 1);
+    el("tripDate").min = pickupDate;
+    el("tripDate").value = pickupDate;
+    el("deliveryDate").min = pickupDate;
+    el("deliveryDate").value = deliveryDate;
+};
+
+const syncDeliveryDateMinimum = () => {
+    const pickupDate = el("tripDate").value || minimumPickupDate();
+    el("deliveryDate").min = pickupDate;
+    if (!el("deliveryDate").value || el("deliveryDate").value < pickupDate) {
+        el("deliveryDate").value = pickupDate;
+    }
+};
+
 const validateTrip = (trip) => {
     if (!canManageTrips()) return "Your role cannot create trip requests.";
     const vehicle = byId(state.vehicles, trip.vehicleId);
     const driver = byId(state.drivers, trip.driverId);
+    const farmerProfile = byId(state.farmers, currentUser?.farmerId);
 
+    if (!trip.farmerId && !trip.groupId) return "Choose a customer before scheduling a trip.";
+    if (!trip.tripDate || !trip.deliveryDate) return "Choose pickup and delivery dates.";
+    if (trip.tripDate < minimumPickupDate()) return "Pickup date must be at least 3 days from today.";
+    if (trip.deliveryDate < trip.tripDate) return "Delivery date cannot be before pickup date.";
+    if (currentUser?.role === "farmer" && trip.farmerId && farmerProfile?.type !== "large_scale") {
+        return "Small-scale farmers must request transport through a farmer group.";
+    }
     if (trip.groupId) {
         const group = byId(state.groups, trip.groupId);
         if (group.members.length < 5) return `${group.name} needs at least 5 members before requesting a trip.`;
+        if (currentUser?.role === "farmer" && groupChairId(group) !== currentUser.farmerId) {
+            return "Only the group chair can request transport for a farmer group.";
+        }
     }
     if (!vehicle || vehicle.status !== "available") return "Vehicle must be available before trip assignment.";
     if (trip.loadWeight > vehicle.capacity) return "Trip load exceeds vehicle capacity.";
@@ -1010,6 +1074,7 @@ const handleTripSubmit = async (event) => {
     event.preventDefault();
     const customerType = document.querySelector("[name='customerType']:checked").value;
     const selectedLoaders = Array.from(el("loaderSelect").selectedOptions).map((option) => Number(option.value));
+    const selectedGroup = customerType === "group" ? byId(state.groups, el("customerSelect").value) : null;
     const trip = {
         id: nextId(state.trips),
         vehicleId: Number(el("vehicleSelect").value),
@@ -1020,10 +1085,12 @@ const handleTripSubmit = async (event) => {
         destination: el("destinationInput").value.trim(),
         distanceKm: Number(el("distanceInput").value),
         tripDate: el("tripDate").value,
+        deliveryDate: el("deliveryDate").value,
         cargoType: el("cargoInput").value.trim(),
         loadWeight: Number(el("weightInput").value),
         baseRate: state.config.baseRate,
         status: "scheduled",
+        requestedByFarmerId: customerType === "group" ? groupChairId(selectedGroup) : currentUser?.role === "farmer" ? currentUser.farmerId : null,
         loaders: selectedLoaders,
         payments: []
     };
@@ -1043,10 +1110,12 @@ const handleTripSubmit = async (event) => {
                     driverId: trip.driverId,
                     farmerId: trip.farmerId,
                     groupId: trip.groupId,
+                    requestedByFarmerId: trip.requestedByFarmerId,
                     origin: trip.origin,
                     destination: trip.destination,
                     distanceKm: trip.distanceKm,
                     tripDate: trip.tripDate,
+                    deliveryDate: trip.deliveryDate,
                     cargoType: trip.cargoType,
                     loadWeight: trip.loadWeight,
                     baseRate: trip.baseRate,
@@ -1056,7 +1125,7 @@ const handleTripSubmit = async (event) => {
             replaceState(payload.state);
             setMessage(el("tripFormMessage"), `Trip #${payload.tripId} saved to MySQL.`, "success");
             event.target.reset();
-            el("tripDate").value = today;
+            setDefaultTripDates();
             updateCostPreview();
         } catch (error) {
             setMessage(el("tripFormMessage"), error.message, "error");
@@ -1067,7 +1136,7 @@ const handleTripSubmit = async (event) => {
     state.trips.push(trip);
     setMessage(el("tripFormMessage"), `Trip #${trip.id} scheduled in demo data.`, "success");
     event.target.reset();
-    el("tripDate").value = today;
+    setDefaultTripDates();
     renderAll();
 };
 
@@ -1281,6 +1350,7 @@ document.querySelectorAll("[name='customerType']").forEach((input) => {
     el(id).addEventListener("input", updateCostPreview);
 });
 
+el("tripDate").addEventListener("change", syncDeliveryDateMinimum);
 el("tripStatusFilter").addEventListener("change", renderTripTable);
 el("capacityFilter").addEventListener("input", renderFleet);
 el("tripForm").addEventListener("submit", handleTripSubmit);
@@ -1356,7 +1426,7 @@ document.querySelectorAll("[data-open-trip]").forEach((button) => {
     button.addEventListener("click", () => switchView("trips"));
 });
 
-el("tripDate").value = today;
+setDefaultTripDates();
 el("originInput").value = "North Valley Farm";
 el("destinationInput").value = "Central Market";
 el("cargoInput").value = "Tomatoes";

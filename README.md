@@ -8,7 +8,9 @@ The project was built as a CS 61 database project and lives in the `Frontend/` d
 
 - Role-based login for system admins, operations managers, accountants, HR managers, drivers, and farmers
 - Farmer self-signup with automatic account creation
-- Trip scheduling for individual farmers or eligible farmer groups
+- Trip scheduling for large-scale individual farmers and eligible farmer groups
+- Group trip requests limited to the group's chair
+- Pickup and delivery date tracking with a minimum three-day pickup buffer
 - Automatic transport cost, tax, and balance calculations
 - Fleet dashboard with vehicle capacity, fuel, maintenance, and assigned driver information
 - Farmer directory and group eligibility checks
@@ -16,6 +18,7 @@ The project was built as a CS 61 database project and lives in the `Frontend/` d
 - HR dashboard for driver status, offences, warnings, suspensions, and trip reviews
 - Farmer portal for profile details, trip requests, payments, and driver/loader reviews
 - Flask API backed by MySQL, with browser-side demo data used as a fallback shape for the UI
+- MySQL trigger-backed rules for trip costs, trip status transitions, vehicle status changes, group trip rules, and driver discipline
 
 ## Project Structure
 
@@ -28,6 +31,13 @@ Frontend/
 ├── account_test_credentials.txt   # Demo/test login accounts
 ├── .env                           # Local environment variables, not committed
 └── Project Plan.pdf               # Project planning document
+```
+
+Additional project notes:
+
+```text
+BUSINESS_RULES_TODO.md             # Remaining business rules and recommended order
+CHANGES_MADE.md                    # Summary of completed rule/app changes
 ```
 
 ## Requirements
@@ -63,6 +73,8 @@ PORT=5001
 ```
 
 The Flask app expects tables such as `AppUser`, `Farmer`, `FarmerGroup`, `GroupMembership`, `Driver`, `Loader`, `Vehicle`, `Trip`, `TripLoader`, `Payment`, `FuelRecord`, `ServiceRecord`, `Offence`, `WarningLetter`, `Suspension`, and `TripReview`.
+
+The current app also expects `Trip` to include `requested_by_farmer_id` and `delivery_date`, and expects MySQL triggers to enforce core business rules.
 
 ## Running Locally
 
@@ -109,6 +121,24 @@ If the database has no users yet, `app.py` can create a default demo system admi
 - `PATCH /api/offences/<id>` updates an offence
 - `POST /api/service-records` creates a maintenance record
 - `POST /api/reviews` creates a farmer review for a driver or loader
+
+## Business Rules
+
+- Large-scale farmers can request individual trips.
+- Small-scale farmers must request trips through farmer groups.
+- Farmer groups must have at least five members before requesting transport.
+- Only a farmer group's `chair` can request transport for that group.
+- Trips require exactly one customer source: either one farmer or one group.
+- Trips require a pickup date at least three days from the database server's current date.
+- Delivery date cannot be before pickup date.
+- Trips require one vehicle, one active driver, and at least one loader.
+- Vehicles must be `available` before trip assignment.
+- Trip costs are calculated by database trigger from base rate, distance, load weight, and tax.
+- Trip status follows `scheduled -> in_progress -> completed` or cancellation paths.
+- `completed` and `cancelled` trips are final.
+- Vehicle status becomes `in_transit` when a trip is in progress and `available` when completed or cancelled.
+- Driver discipline is trigger-backed: surcharge offences can create warnings, suspensions, and termination.
+- Terminated driver accounts cannot log in.
 
 ## Role Access
 

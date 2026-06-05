@@ -1,4 +1,5 @@
 import os
+from datetime import date, timedelta
 from decimal import Decimal
 from functools import wraps
 
@@ -76,6 +77,11 @@ def create_app():
             return jsonify({"error": "Invalid username or password."}), 401
         if role and user["role"] != role:
             return jsonify({"error": f"That account is registered as {user['role'].replace('_', ' ')}."}), 403
+        try:
+            if driver_account_terminated(user):
+                return jsonify({"error": "This driver account has been terminated."}), 403
+        except Error as exc:
+            return jsonify({"error": str(exc)}), 500
 
         user_public = public_user(user)
         return jsonify({
@@ -154,6 +160,7 @@ def create_app():
             "destination",
             "distanceKm",
             "tripDate",
+            "deliveryDate",
             "cargoType",
             "loadWeight",
             "loaders",
@@ -169,8 +176,6 @@ def create_app():
 
         if bool(farmer_id) == bool(group_id):
             return jsonify({"error": "Trip must use exactly one customer source."}), 400
-        if request.user["role"] == "farmer" and farmer_id != request.user.get("farmerId"):
-            return jsonify({"error": "Farmer accounts can only request trips for their own farmer profile."}), 403
         if not loaders:
             return jsonify({"error": "A trip must have at least one loader before completion."}), 400
 
@@ -178,9 +183,35 @@ def create_app():
             with get_connection() as conn:
                 conn.start_transaction()
                 try:
+                    date_error = validate_trip_dates(conn, data)
+                    if date_error:
+                        conn.rollback()
+                        return jsonify({"error": date_error}), 400
+
+                    if farmer_id and farmer_type(conn, farmer_id) != "large_scale":
+                        conn.rollback()
+                        return jsonify({"error": "Small-scale farmers must request transport through a farmer group."}), 400
+
                     if group_id and group_member_count(conn, group_id) < 5:
                         conn.rollback()
                         return jsonify({"error": "A farmer group needs at least 5 members before requesting a trip."}), 400
+
+                    if group_id and data.get("requestedByFarmerId") and not farmer_is_group_chair(conn, data.get("requestedByFarmerId"), group_id):
+                        conn.rollback()
+                        return jsonify({"error": "Group trips must be requested by the group chair."}), 403
+
+                    if request.user["role"] == "farmer":
+                        requester_id = request.user.get("farmerId")
+                        if farmer_id:
+                            if farmer_id != requester_id:
+                                conn.rollback()
+                                return jsonify({"error": "Farmer accounts can only request trips for their own farmer profile."}), 403
+                            data["requestedByFarmerId"] = requester_id
+                        if group_id:
+                            if not farmer_is_group_chair(conn, requester_id, group_id):
+                                conn.rollback()
+                                return jsonify({"error": "Only the group chair can request transport for a farmer group."}), 403
+                            data["requestedByFarmerId"] = requester_id
 
                     trip_id = insert_trip(conn, data)
                     insert_trip_loaders(conn, trip_id, loaders)
@@ -354,6 +385,11 @@ def require_auth(view):
             return jsonify({"error": "Session expired. Please log in again."}), 401
         except BadSignature:
             return jsonify({"error": "Invalid session. Please log in again."}), 401
+        try:
+            if driver_account_terminated(request.user):
+                return jsonify({"error": "This driver account has been terminated. Please contact HR."}), 401
+        except Error as exc:
+            return jsonify({"error": str(exc)}), 500
         return view(*args, **kwargs)
 
     return wrapped
@@ -396,6 +432,22 @@ def find_user_by_id(conn, user_id):
             (user_id,),
         )
         return cursor.fetchone()
+
+
+def driver_account_terminated(user):
+    if user.get("role") != "driver":
+        return False
+    driver_id = user.get("driver_id") or user.get("driverId")
+    if not driver_id:
+        return False
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT status FROM Driver WHERE driver_id = %s",
+                (driver_id,),
+            )
+            row = cursor.fetchone()
+    return bool(row and row[0] == "terminated")
 
 
 def ensure_demo_admin(conn, username, password):
@@ -517,7 +569,9 @@ def load_bootstrap(conn, user=None):
         SELECT fg.group_id AS id,
                fg.group_name AS name,
                fg.region,
-               GROUP_CONCAT(gm.farmer_id ORDER BY gm.farmer_id) AS member_ids
+               GROUP_CONCAT(gm.farmer_id ORDER BY gm.farmer_id) AS member_ids,
+               GROUP_CONCAT(CONCAT(gm.farmer_id, ':', gm.role) ORDER BY gm.farmer_id) AS member_roles,
+               MAX(CASE WHEN gm.role = 'chair' THEN gm.farmer_id END) AS chairId
         FROM FarmerGroup fg
         LEFT JOIN GroupMembership gm ON fg.group_id = gm.group_id
         GROUP BY fg.group_id, fg.group_name, fg.region
@@ -526,6 +580,7 @@ def load_bootstrap(conn, user=None):
     )
     for group in groups:
         group["members"] = parse_id_list(group.pop("member_ids"))
+        group["memberRoles"] = parse_member_roles(group.pop("member_roles"))
 
     drivers = fetch_all(
         conn,
@@ -615,11 +670,13 @@ def load_bootstrap(conn, user=None):
                t.driver_id AS driverId,
                t.customer_farmer_id AS farmerId,
                t.customer_group_id AS groupId,
+               t.requested_by_farmer_id AS requestedByFarmerId,
                COALESCE(CONCAT(f.first_name, ' ', f.last_name), fg.group_name) AS customerName,
                t.origin,
                t.destination,
                t.distance_km AS distanceKm,
                DATE_FORMAT(t.trip_date, '%Y-%m-%d') AS tripDate,
+               DATE_FORMAT(t.delivery_date, '%Y-%m-%d') AS deliveryDate,
                t.cargo_type AS cargoType,
                t.load_weight AS loadWeight,
                t.base_rate AS baseRate,
@@ -816,6 +873,19 @@ def parse_id_list(value):
     return [int(item) for item in str(value).split(",") if item]
 
 
+def parse_member_roles(value):
+    roles = {}
+    if not value:
+        return roles
+    for item in str(value).split(","):
+        if ":" not in item:
+            continue
+        farmer_id, role = item.split(":", 1)
+        if farmer_id:
+            roles[str(int(farmer_id))] = role
+    return roles
+
+
 def group_member_count(conn, group_id):
     with conn.cursor() as cursor:
         cursor.execute(
@@ -823,6 +893,51 @@ def group_member_count(conn, group_id):
             (group_id,),
         )
         return cursor.fetchone()[0]
+
+
+def farmer_type(conn, farmer_id):
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT farmer_type FROM Farmer WHERE farmer_id = %s",
+            (farmer_id,),
+        )
+        row = cursor.fetchone()
+    return row[0] if row else None
+
+
+def farmer_is_group_chair(conn, farmer_id, group_id):
+    if not farmer_id or not group_id:
+        return False
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT COUNT(*)
+            FROM GroupMembership
+            WHERE farmer_id = %s
+              AND group_id = %s
+              AND role = 'chair'
+            """,
+            (farmer_id, group_id),
+        )
+        return cursor.fetchone()[0] > 0
+
+
+def validate_trip_dates(conn, data):
+    try:
+        pickup_date = date.fromisoformat(str(data.get("tripDate")))
+        delivery_date = date.fromisoformat(str(data.get("deliveryDate")))
+    except (TypeError, ValueError):
+        return "Pickup and delivery dates must use YYYY-MM-DD format."
+
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT CURRENT_DATE")
+        current_date = cursor.fetchone()[0]
+    minimum_pickup_date = current_date + timedelta(days=3)
+    if pickup_date < minimum_pickup_date:
+        return "Pickup date must be at least 3 days from today."
+    if delivery_date < pickup_date:
+        return "Delivery date cannot be before pickup date."
+    return ""
 
 
 def driver_assigned_to_vehicle(conn, driver_id, vehicle_id):
@@ -850,10 +965,12 @@ def insert_trip(conn, data):
                 driver_id,
                 customer_farmer_id,
                 customer_group_id,
+                requested_by_farmer_id,
                 origin,
                 destination,
                 distance_km,
                 trip_date,
+                delivery_date,
                 cargo_type,
                 load_weight,
                 base_rate,
@@ -862,17 +979,19 @@ def insert_trip(conn, data):
                 total_cost,
                 trip_status
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0, 0, 0, 'scheduled')
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0, 0, 0, 'scheduled')
             """,
             (
                 data["vehicleId"],
                 data["driverId"],
                 data.get("farmerId"),
                 data.get("groupId"),
+                data.get("requestedByFarmerId"),
                 data["origin"],
                 data["destination"],
                 data["distanceKm"],
                 data["tripDate"],
+                data["deliveryDate"],
                 data["cargoType"],
                 data["loadWeight"],
                 data["baseRate"],

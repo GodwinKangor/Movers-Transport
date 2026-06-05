@@ -249,7 +249,7 @@
                                 <select id="tripStatusFilter" aria-label="Filter trips by status">
                                     <option value="all">All trips</option>
                                     <option value="scheduled">Scheduled</option>
-                                    <option value="in_transit">In transit</option>
+                                    <option value="in_progress">In progress</option>
                                     <option value="completed">Completed</option>
                                     <option value="cancelled">Cancelled</option>
                                 </select>
@@ -307,8 +307,15 @@
                                 <select id="customerSelect" required></select>
                             </label>
                             <label>
-                                Trip date
+                                Pickup date
                                 <input id="tripDate" type="date" required>
+                            </label>
+                        </div>
+
+                        <div class="field-row">
+                            <label>
+                                Delivery date
+                                <input id="deliveryDate" type="date" required>
                             </label>
                         </div>
 
