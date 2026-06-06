@@ -2,6 +2,15 @@ const seedState = () => ({
     config: {
         baseRate: 0.75
     },
+    users: [
+        { id: 1, username: "admin", role: "system_admin", farmerId: null, driverId: null },
+        { id: 2, username: "ops.maria", role: "ops_manager", farmerId: null, driverId: null },
+        { id: 3, username: "acct.sam", role: "accountant", farmerId: null, driverId: null },
+        { id: 4, username: "hr.nia", role: "hr_manager", farmerId: null, driverId: null },
+        { id: 5, username: "driver.daniel", role: "driver", farmerId: null, driverId: 1 },
+        { id: 6, username: "farmer.amina", role: "farmer", farmerId: 1, driverId: null },
+        { id: 7, username: "farmer.kwame", role: "farmer", farmerId: 2, driverId: null }
+    ],
     farmers: [
         { id: 1, name: "Amina Mensah", phone: "555-0101", address: "North Valley Farm Road", type: "large_scale" },
         { id: 2, name: "Kwame Boateng", phone: "555-0102", address: "East Ridge Farm 12", type: "small_scale" },
@@ -269,10 +278,18 @@ const sum = (values) => values.reduce((total, value) => total + value, 0);
 const byId = (items, id) => items.find((item) => item.id === Number(id));
 const nextId = (items) => items.length ? Math.max(...items.map((item) => item.id)) + 1 : 1;
 const statusText = (value) => value.replaceAll("_", " ");
-const canManageTrips = () => ["system_admin", "ops_manager", "farmer"].includes(currentUser?.role);
+const canRequestTransport = () => {
+    if (["system_admin", "ops_manager"].includes(currentUser?.role)) return true;
+    if (currentUser?.role !== "farmer") return false;
+    const farmer = byId(state.farmers, currentUser.farmerId);
+    if (farmer?.type === "large_scale") return true;
+    return farmerChairedGroups().some((group) => group.members.length >= 5);
+};
+const canUpdateTripStatus = () => ["system_admin", "ops_manager"].includes(currentUser?.role);
+const canRecordPayments = () => ["system_admin", "ops_manager", "accountant"].includes(currentUser?.role);
 const canRecordOffences = () => ["system_admin", "hr_manager", "ops_manager"].includes(currentUser?.role);
 const roleViews = {
-    system_admin: ["dashboard", "trips", "fleet", "farmers", "discipline"],
+    system_admin: ["dashboard", "trips", "fleet", "farmers", "discipline", "users"],
     ops_manager: ["dashboard", "trips", "fleet", "farmers", "discipline"],
     accountant: ["dashboard", "trips", "fleet"],
     hr_manager: ["dashboard", "discipline"],
@@ -281,6 +298,7 @@ const roleViews = {
 };
 
 const canView = (viewName) => (roleViews[currentUser?.role] || ["dashboard"]).includes(viewName);
+const staffRoles = ["system_admin", "ops_manager", "accountant", "hr_manager"];
 
 const renderOptions = (select, items, labelFn, valueFn = (item) => item.id) => {
     select.innerHTML = items.map((item) => `<option value="${valueFn(item)}">${labelFn(item)}</option>`).join("");
@@ -299,6 +317,34 @@ const isPastTrip = (trip) => trip.status === "completed" || trip.tripDate <= tod
 const tripLoadersText = (trip) => trip.loaders.map(getLoaderName).join(", ") || "No loaders assigned";
 const groupChairId = (group) => Number(group?.chairId || Object.entries(group?.memberRoles || {}).find(([, role]) => role === "chair")?.[0] || 0);
 const farmerChairedGroups = () => state.groups.filter((group) => groupChairId(group) === currentUser?.farmerId);
+const tripPaymentTotal = (trip) => sum((trip.payments || []).map((payment) => payment.amount));
+const tripBalance = (trip) => Math.max(tripCost(trip).total - tripPaymentTotal(trip), 0);
+const paymentStatus = (trip) => {
+    const paid = tripPaymentTotal(trip);
+    const total = tripCost(trip).total;
+    if (paid <= 0) return "unpaid";
+    if (paid < total) return "partial";
+    return "paid";
+};
+const dateRangesOverlap = (startA, endA, startB, endB) => startA <= endB && startB <= endA;
+const activeTripConflicts = (trip, resourceType, resourceId) => {
+    const pickup = el("tripDate")?.value || trip?.tripDate;
+    const delivery = el("deliveryDate")?.value || trip?.deliveryDate || pickup;
+    if (!pickup || !delivery) return false;
+    return state.trips.some((item) => {
+        if (item.status === "cancelled") return false;
+        if (!dateRangesOverlap(pickup, delivery, item.tripDate, item.deliveryDate || item.tripDate)) return false;
+        if (resourceType === "driver") return item.driverId === resourceId;
+        if (resourceType === "vehicle") return item.vehicleId === resourceId;
+        return item.loaders.includes(resourceId);
+    });
+};
+const nextStatuses = (status) => ({
+    scheduled: ["in_progress", "cancelled"],
+    in_progress: ["completed", "cancelled"],
+    completed: [],
+    cancelled: []
+}[status] || []);
 
 const setMessage = (node, text, tone = "") => {
     node.className = `form-message ${tone}`.trim();
@@ -627,16 +673,24 @@ const renderTripTable = () => {
 };
 
 const renderRules = () => {
-    const overloaded = state.trips.filter((trip) => trip.loadWeight > getVehicle(trip.vehicleId).capacity);
+    const overloaded = state.trips.filter((trip) => trip.loadWeight > (getVehicle(trip.vehicleId)?.capacity || 0));
     const loaderless = state.trips.filter((trip) => trip.loaders.length === 0);
     const ineligibleGroups = state.groups.filter((group) => group.members.length < 5);
-    const suspendedAssignments = state.trips.filter((trip) => byId(state.drivers, trip.driverId).status !== "active");
+    const suspendedAssignments = state.trips.filter((trip) => byId(state.drivers, trip.driverId)?.status !== "active");
+    const schedulingConflicts = state.trips.filter((trip, index) => state.trips.some((other, otherIndex) => {
+        if (otherIndex <= index || trip.status === "cancelled" || other.status === "cancelled") return false;
+        if (!dateRangesOverlap(trip.tripDate, trip.deliveryDate || trip.tripDate, other.tripDate, other.deliveryDate || other.tripDate)) return false;
+        return trip.driverId === other.driverId
+            || trip.vehicleId === other.vehicleId
+            || trip.loaders.some((loaderId) => other.loaders.includes(loaderId));
+    }));
 
     const rules = [
         { label: "Vehicle capacity", detail: overloaded.length ? `${overloaded.length} trips exceed capacity.` : "All scheduled loads fit selected vehicles.", tone: overloaded.length ? "danger" : "" },
         { label: "Loader requirement", detail: loaderless.length ? `${loaderless.length} trips need at least one loader.` : "Every trip has a loader assigned.", tone: loaderless.length ? "warn" : "" },
         { label: "Group eligibility", detail: ineligibleGroups.length ? `${ineligibleGroups.length} groups have fewer than 5 members.` : "All groups can request transport.", tone: ineligibleGroups.length ? "warn" : "" },
-        { label: "Driver status", detail: suspendedAssignments.length ? `${suspendedAssignments.length} trips use inactive drivers.` : "Trips use active drivers only.", tone: suspendedAssignments.length ? "danger" : "" }
+        { label: "Driver status", detail: suspendedAssignments.length ? `${suspendedAssignments.length} trips use inactive drivers.` : "Trips use active drivers only.", tone: suspendedAssignments.length ? "danger" : "" },
+        { label: "Scheduling conflicts", detail: schedulingConflicts.length ? `${schedulingConflicts.length} trips overlap on driver, vehicle, or loader.` : "Active assignments do not overlap.", tone: schedulingConflicts.length ? "danger" : "" }
     ];
 
     el("ruleList").innerHTML = rules.map((rule) => `
@@ -654,11 +708,12 @@ const renderTripFormOptions = () => {
     const farmerAccount = currentUser?.role === "farmer";
     const farmerProfile = byId(state.farmers, currentUser?.farmerId);
     const chairGroups = farmerAccount ? farmerChairedGroups() : [];
+    const eligibleChairGroups = chairGroups.filter((group) => group.members.length >= 5);
     const farmerRadio = document.querySelector("[name='customerType'][value='farmer']");
     const groupRadio = document.querySelector("[name='customerType'][value='group']");
     if (farmerAccount) {
         farmerRadio.disabled = farmerProfile?.type !== "large_scale";
-        groupRadio.disabled = chairGroups.length === 0;
+        groupRadio.disabled = eligibleChairGroups.length === 0;
         if (farmerRadio.disabled && !groupRadio.disabled) {
             groupRadio.checked = true;
         } else if (!farmerRadio.disabled && groupRadio.disabled) {
@@ -675,7 +730,7 @@ const renderTripFormOptions = () => {
     const customers = farmerAccount
         ? customerType === "farmer"
             ? state.farmers.filter((farmer) => farmer.id === currentUser.farmerId && farmer.type === "large_scale")
-            : chairGroups
+            : eligibleChairGroups
         : customerType === "farmer"
         ? state.farmers.filter((farmer) => farmer.type === "large_scale")
         : state.groups;
@@ -684,17 +739,21 @@ const renderTripFormOptions = () => {
         if (customerType === "farmer") return `${item.name} (${statusText(item.type)})`;
         return `${item.name} (${item.members.length} members)`;
     });
+    const availableVehicles = state.vehicles.filter((vehicle) => vehicle.status === "available" && !activeTripConflicts(null, "vehicle", vehicle.id));
+    const activeDrivers = state.drivers.filter((driver) => driver.status === "active" && !activeTripConflicts(null, "driver", driver.id));
+    const availableLoaders = state.loaders.filter((loader) => !activeTripConflicts(null, "loader", loader.id));
+
     renderOptions(
         el("vehicleSelect"),
-        state.vehicles,
+        availableVehicles,
         (vehicle) => `${vehicle.plate} - ${statusText(vehicle.size)}, ${vehicle.capacity.toLocaleString()} kg, ${statusText(vehicle.status)}`
     );
     renderOptions(
         el("driverSelect"),
-        state.drivers,
+        activeDrivers,
         (driver) => `${driver.name} - ${statusText(driver.status)}`
     );
-    renderOptions(el("loaderSelect"), state.loaders, (loader) => `${loader.name} - ${money.format(loader.rate)}/hr`);
+    renderOptions(el("loaderSelect"), availableLoaders, (loader) => `${loader.name} - ${money.format(loader.rate)}/hr`);
     renderOptions(el("offenceDriverSelect"), state.drivers, (driver) => `${driver.name} - ${statusText(driver.status)}`);
 };
 
@@ -719,8 +778,47 @@ const renderWorkload = () => {
 const tripDetailMarkup = (trip) => {
     const vehicle = getVehicle(trip.vehicleId);
     const costs = tripCost(trip);
-    const paid = sum(trip.payments.map((payment) => payment.amount));
-    const balance = Math.max(costs.total - paid, 0);
+    const paid = tripPaymentTotal(trip);
+    const balance = tripBalance(trip);
+    const statusActions = canUpdateTripStatus() && nextStatuses(trip.status).length
+        ? `
+            <div class="detail-section">
+                <h4>Status actions</h4>
+                <div class="action-row">
+                    ${nextStatuses(trip.status).map((status) => `
+                        <button class="primary-button ${status === "cancelled" ? "danger-button" : ""}" data-trip-status="${status}" data-status-trip-id="${trip.id}" type="button">
+                            ${statusText(status)}
+                        </button>
+                    `).join("")}
+                </div>
+                <div id="tripStatusMessage" class="form-message" aria-live="polite"></div>
+            </div>
+        `
+        : "";
+    const paymentForm = canRecordPayments() && trip.status !== "cancelled" && balance > 0
+        ? `
+            <form class="detail-section payment-form" data-payment-trip-id="${trip.id}">
+                <h4>Record payment</h4>
+                <div class="field-row">
+                    <label>
+                        Amount
+                        <input name="amount" type="number" min="0.01" max="${balance}" step="0.01" value="${balance.toFixed(2)}" required>
+                    </label>
+                    <label>
+                        Method
+                        <select name="method" required>
+                            <option value="cash">Cash</option>
+                            <option value="mobile_money">Mobile money</option>
+                            <option value="bank_transfer">Bank transfer</option>
+                            <option value="card">Card</option>
+                        </select>
+                    </label>
+                </div>
+                <button class="primary-button" type="submit">Save payment</button>
+                <div id="paymentMessage" class="form-message" aria-live="polite"></div>
+            </form>
+        `
+        : "";
     return `
         <div class="profile-grid compact">
             <div class="profile-field"><span>Customer</span><strong>${getCustomerName(trip)}</strong></div>
@@ -733,6 +831,8 @@ const tripDetailMarkup = (trip) => {
             <div class="profile-field"><span>Driver</span><strong>${getDriverName(trip.driverId)}</strong></div>
             <div class="profile-field"><span>Vehicle</span><strong>${vehicle ? vehicle.plate : "Unassigned"}</strong></div>
             <div class="profile-field"><span>Loaders</span><strong>${tripLoadersText(trip)}</strong></div>
+            <div class="profile-field"><span>Payment</span><strong>${statusText(paymentStatus(trip))}</strong></div>
+            <div class="profile-field"><span>Paid</span><strong>${money.format(paid)}</strong></div>
             <div class="profile-field"><span>Balance</span><strong>${money.format(balance)}</strong></div>
         </div>
         <div class="cost-preview">
@@ -740,6 +840,18 @@ const tripDetailMarkup = (trip) => {
             <div><span>Tax</span><strong>${money.format(costs.tax)}</strong></div>
             <div><span>Total</span><strong>${money.format(costs.total)}</strong></div>
         </div>
+        <div class="detail-section">
+            <h4>Payments</h4>
+            <div class="stack-list">
+                ${trip.payments.length ? trip.payments.map((payment) => `
+                    <article class="list-item">
+                        <div><strong>${money.format(payment.amount)}</strong><p>${statusText(payment.method)}${payment.paymentDate ? ` on ${payment.paymentDate}` : ""}</p></div>
+                    </article>
+                `).join("") : `<p class="muted-label">No customer payments recorded.</p>`}
+            </div>
+        </div>
+        ${statusActions}
+        ${paymentForm}
     `;
 };
 
@@ -891,6 +1003,7 @@ const renderFarmerPortal = () => {
         el("farmerPaymentSummary").textContent = "";
         el("farmerPaymentList").innerHTML = "";
         el("farmerTripList").innerHTML = "";
+        el("smallScaleOnboardingPanel").classList.add("auth-hidden");
         return;
     }
 
@@ -912,6 +1025,8 @@ const renderFarmerPortal = () => {
             <strong>${value}</strong>
         </div>
     `).join("");
+
+    renderSmallScaleOnboarding(farmer, groups);
 
     el("farmerPaymentSummary").textContent = `${money.format(totalPaid)} paid`;
     el("farmerPaymentList").innerHTML = trips.length ? trips.map((trip) => {
@@ -951,6 +1066,50 @@ const renderFarmerPortal = () => {
 
     renderReviewFormOptions(trips);
     renderFarmerReviews(farmer.id);
+};
+
+const renderSmallScaleOnboarding = (farmer, memberGroups) => {
+    const panel = el("smallScaleOnboardingPanel");
+    const isSmallScale = farmer.type === "small_scale";
+    panel.classList.toggle("auth-hidden", !isSmallScale);
+    if (!isSmallScale) return;
+
+    const chairGroups = memberGroups.filter((group) => groupChairId(group) === farmer.id);
+    const eligibleChairGroups = chairGroups.filter((group) => group.members.length >= 5);
+    const availableGroups = state.groups.filter((group) => !group.members.includes(farmer.id));
+    el("groupOnboardingSummary").textContent = eligibleChairGroups.length
+        ? "Eligible to request group transport"
+        : "Join or form a group";
+
+    const membershipItems = memberGroups.map((group) => {
+        const chair = groupChairId(group) === farmer.id;
+        const eligible = group.members.length >= 5;
+        return `
+            <article class="list-item">
+                <div>
+                    <strong>${group.name}</strong>
+                    <p>${group.region} - ${group.members.length} members - ${chair ? "you are chair" : "member"}</p>
+                </div>
+                <span class="badge ${eligible ? "" : "warn"}">${eligible ? "eligible" : "needs members"}</span>
+            </article>
+        `;
+    });
+    const joinItems = availableGroups.map((group) => `
+        <article class="list-item">
+            <div>
+                <strong>${group.name}</strong>
+                <p>${group.region} - ${group.members.length} members</p>
+            </div>
+            <button class="primary-button" data-join-group-id="${group.id}" type="button">Join</button>
+        </article>
+    `);
+
+    el("groupOnboardingList").innerHTML = [
+        memberGroups.length ? `<p class="muted-label">Your groups</p>` : `<p class="muted-label">You are not in a farmer group yet.</p>`,
+        ...membershipItems,
+        availableGroups.length ? `<p class="muted-label">Available groups</p>` : `<p class="muted-label">No other groups are available to join.</p>`,
+        ...joinItems
+    ].join("");
 };
 
 const renderReviewFormOptions = (trips) => {
@@ -1012,6 +1171,45 @@ const renderDiscipline = () => {
     }).join("");
 };
 
+const renderUsers = () => {
+    const panel = el("usersView");
+    if (!panel) return;
+    const allowed = currentUser?.role === "system_admin";
+    el("staffUserForm").classList.toggle("role-disabled", !allowed);
+    el("staffUserForm").querySelectorAll("input, select, button").forEach((field) => {
+        field.disabled = !allowed;
+    });
+    if (!allowed) {
+        el("userSummary").textContent = "";
+        el("userList").innerHTML = "";
+        return;
+    }
+
+    el("userSummary").textContent = `${state.users.length} accounts`;
+    el("userList").innerHTML = state.users.map((user) => {
+        const linked = user.farmerId ? "farmer profile" : user.driverId ? "driver profile" : "staff account";
+        const canEdit = !user.farmerId && !user.driverId && user.id !== currentUser?.id;
+        return `
+            <article class="list-item user-account">
+                <div>
+                    <strong>${user.username}</strong>
+                    <p>${linked}</p>
+                </div>
+                ${canEdit ? `
+                    <label class="inline-role">
+                        Role
+                        <select data-user-role-id="${user.id}">
+                            ${staffRoles.map((role) => `
+                                <option value="${role}" ${user.role === role ? "selected" : ""}>${statusText(role)}</option>
+                            `).join("")}
+                        </select>
+                    </label>
+                ` : `<span class="badge">${statusText(user.role)}</span>`}
+            </article>
+        `;
+    }).join("") || `<p class="muted-label">No user accounts found.</p>`;
+};
+
 const updateCostPreview = () => {
     const trip = {
         distanceKm: Number(el("distanceInput").value),
@@ -1043,7 +1241,7 @@ const syncDeliveryDateMinimum = () => {
 };
 
 const validateTrip = (trip) => {
-    if (!canManageTrips()) return "Your role cannot create trip requests.";
+    if (!canRequestTransport()) return "Your role cannot create trip requests.";
     const vehicle = byId(state.vehicles, trip.vehicleId);
     const driver = byId(state.drivers, trip.driverId);
     const farmerProfile = byId(state.farmers, currentUser?.farmerId);
@@ -1067,6 +1265,10 @@ const validateTrip = (trip) => {
     if (!driver || driver.status !== "active") return "Driver must be active before trip assignment.";
     if (vehicle.assignedDriverId && vehicle.assignedDriverId !== driver.id) return "Trip driver must match the vehicle assigned driver.";
     if (trip.loaders.length === 0) return "A trip must have at least one loader before completion.";
+    if (activeTripConflicts(trip, "driver", trip.driverId)) return "Driver is already assigned during those dates.";
+    if (activeTripConflicts(trip, "vehicle", trip.vehicleId)) return "Vehicle is already assigned during those dates.";
+    const busyLoader = trip.loaders.find((loaderId) => activeTripConflicts(trip, "loader", loaderId));
+    if (busyLoader) return `${getLoaderName(busyLoader)} is already assigned during those dates.`;
     return "";
 };
 
@@ -1185,6 +1387,74 @@ const handleOffenceSubmit = async (event) => {
     renderAll();
 };
 
+const handleTripStatusUpdate = async (button) => {
+    const tripId = Number(button.dataset.statusTripId);
+    const status = button.dataset.tripStatus;
+    if (!canUpdateTripStatus()) return;
+
+    if (apiAvailable) {
+        try {
+            const payload = await apiRequest(`/api/trips/${tripId}/status`, {
+                method: "PATCH",
+                body: JSON.stringify({ status })
+            });
+            replaceState(payload.state);
+        } catch (error) {
+            window.alert(error.message);
+        }
+        return;
+    }
+
+    const trip = byId(state.trips, tripId);
+    if (!trip || !nextStatuses(trip.status).includes(status)) return;
+    trip.status = status;
+    const vehicle = getVehicle(trip.vehicleId);
+    if (vehicle && status === "in_progress") vehicle.status = "in_transit";
+    if (vehicle && ["completed", "cancelled"].includes(status)) vehicle.status = "available";
+    renderAll();
+};
+
+const handlePaymentSubmit = async (form) => {
+    const tripId = Number(form.dataset.paymentTripId);
+    const amount = Number(form.elements.amount.value) || 0;
+    const method = form.elements.method.value;
+    const trip = byId(state.trips, tripId);
+    if (!canRecordPayments() || !trip) return;
+    if (amount <= 0) {
+        setMessage(el("paymentMessage"), "Payment amount must be greater than zero.", "error");
+        return;
+    }
+    if (trip.status === "cancelled") {
+        setMessage(el("paymentMessage"), "Cancelled trips cannot accept payments.", "error");
+        return;
+    }
+    if (amount > tripBalance(trip)) {
+        setMessage(el("paymentMessage"), `Payment exceeds the remaining balance of ${money.format(tripBalance(trip))}.`, "error");
+        return;
+    }
+
+    if (apiAvailable) {
+        try {
+            const payload = await apiRequest("/api/payments", {
+                method: "POST",
+                body: JSON.stringify({ tripId, amount, method })
+            });
+            replaceState(payload.state);
+        } catch (error) {
+            setMessage(el("paymentMessage"), error.message, "error");
+        }
+        return;
+    }
+
+    trip.payments.push({
+        id: nextId(trip.payments),
+        amount,
+        method,
+        paymentDate: today
+    });
+    renderAll();
+};
+
 const handleOffenceUpdate = async (form) => {
     const offenceId = Number(form.dataset.offenceId);
     const type = form.elements.type.value.trim();
@@ -1289,6 +1559,158 @@ const handleTripReviewSubmit = async (event) => {
     renderAll();
 };
 
+const handleGroupCreateSubmit = async (event) => {
+    event.preventDefault();
+    const farmer = byId(state.farmers, currentUser?.farmerId);
+    if (farmer?.type !== "small_scale") {
+        setMessage(el("groupMessage"), "Only small-scale farmers can create farmer groups.", "error");
+        return;
+    }
+    const group = {
+        name: el("groupNameInput").value.trim(),
+        region: el("groupRegionInput").value.trim()
+    };
+    if (!group.name || !group.region) {
+        setMessage(el("groupMessage"), "Group name and region are required.", "error");
+        return;
+    }
+
+    if (apiAvailable) {
+        try {
+            const payload = await apiRequest("/api/groups", {
+                method: "POST",
+                body: JSON.stringify(group)
+            });
+            replaceState(payload.state);
+            setMessage(el("groupMessage"), `Group #${payload.groupId} created.`, "success");
+            event.target.reset();
+        } catch (error) {
+            setMessage(el("groupMessage"), error.message, "error");
+        }
+        return;
+    }
+
+    state.groups.push({
+        id: nextId(state.groups),
+        name: group.name,
+        region: group.region,
+        members: [farmer.id],
+        chairId: farmer.id,
+        memberRoles: { [String(farmer.id)]: "chair" }
+    });
+    setMessage(el("groupMessage"), "Group created in demo data.", "success");
+    event.target.reset();
+    renderAll();
+};
+
+const handleGroupJoin = async (button) => {
+    const farmer = byId(state.farmers, currentUser?.farmerId);
+    const groupId = Number(button.dataset.joinGroupId);
+    const group = byId(state.groups, groupId);
+    if (farmer?.type !== "small_scale" || !group) return;
+
+    if (apiAvailable) {
+        try {
+            const payload = await apiRequest(`/api/groups/${groupId}/join`, {
+                method: "POST",
+                body: JSON.stringify({})
+            });
+            replaceState(payload.state);
+            setMessage(el("groupMessage"), `Joined ${group.name}.`, "success");
+        } catch (error) {
+            setMessage(el("groupMessage"), error.message, "error");
+        }
+        return;
+    }
+
+    if (group.members.includes(farmer.id)) {
+        setMessage(el("groupMessage"), "You are already a member of this group.", "error");
+        return;
+    }
+    group.members.push(farmer.id);
+    group.memberRoles = { ...(group.memberRoles || {}), [String(farmer.id)]: "member" };
+    setMessage(el("groupMessage"), `Joined ${group.name} in demo data.`, "success");
+    renderAll();
+};
+
+const handleStaffUserSubmit = async (event) => {
+    event.preventDefault();
+    if (currentUser?.role !== "system_admin") {
+        setMessage(el("staffUserMessage"), "Only system admins can create staff users.", "error");
+        return;
+    }
+
+    const staffUser = {
+        username: el("staffUsernameInput").value.trim(),
+        password: el("staffPasswordInput").value,
+        role: el("staffRoleSelect").value
+    };
+    if (!staffUser.username || !staffUser.password || !staffUser.role) {
+        setMessage(el("staffUserMessage"), "Username, password, and role are required.", "error");
+        return;
+    }
+    if (staffUser.password.length < 6) {
+        setMessage(el("staffUserMessage"), "Password must be at least 6 characters.", "error");
+        return;
+    }
+
+    if (apiAvailable) {
+        try {
+            const payload = await apiRequest("/api/users/staff", {
+                method: "POST",
+                body: JSON.stringify(staffUser)
+            });
+            replaceState(payload.state);
+            setMessage(el("staffUserMessage"), `User #${payload.userId} created.`, "success");
+            event.target.reset();
+        } catch (error) {
+            setMessage(el("staffUserMessage"), error.message, "error");
+        }
+        return;
+    }
+
+    if (state.users.some((user) => user.username === staffUser.username)) {
+        setMessage(el("staffUserMessage"), "Username is already taken.", "error");
+        return;
+    }
+    state.users.push({
+        id: nextId(state.users),
+        username: staffUser.username,
+        role: staffUser.role,
+        farmerId: null,
+        driverId: null
+    });
+    setMessage(el("staffUserMessage"), "Staff user created in demo data.", "success");
+    event.target.reset();
+    renderAll();
+};
+
+const handleUserRoleUpdate = async (select) => {
+    const userId = Number(select.dataset.userRoleId);
+    const role = select.value;
+    const user = byId(state.users, userId);
+    if (!user || currentUser?.role !== "system_admin") return;
+
+    if (apiAvailable) {
+        try {
+            const payload = await apiRequest(`/api/users/${userId}/role`, {
+                method: "PATCH",
+                body: JSON.stringify({ role })
+            });
+            replaceState(payload.state);
+            setMessage(el("staffUserMessage"), `Updated ${user.username}.`, "success");
+        } catch (error) {
+            setMessage(el("staffUserMessage"), error.message, "error");
+            select.value = user.role;
+        }
+        return;
+    }
+
+    user.role = role;
+    setMessage(el("staffUserMessage"), `Updated ${user.username} in demo data.`, "success");
+    renderAll();
+};
+
 const switchView = (viewName) => {
     if (!canView(viewName)) viewName = "dashboard";
     document.querySelectorAll(".nav-tab").forEach((tab) => {
@@ -1302,7 +1724,7 @@ const switchView = (viewName) => {
 };
 
 const applyRoleAccess = () => {
-    const tripAllowed = canManageTrips();
+    const tripAllowed = canRequestTransport();
     const offenceAllowed = canRecordOffences();
     document.querySelectorAll(".nav-tab").forEach((tab) => {
         tab.classList.toggle("auth-hidden", !canView(tab.dataset.view));
@@ -1320,7 +1742,12 @@ const applyRoleAccess = () => {
     document.querySelectorAll("[data-open-trip]").forEach((button) => {
         button.disabled = !tripAllowed;
     });
-    if (!tripAllowed) setMessage(el("tripFormMessage"), "This role can view trips but cannot create new trip requests.", "error");
+    if (!tripAllowed) {
+        const message = currentUser?.role === "farmer"
+            ? "Small-scale farmers must chair an eligible group before requesting transport."
+            : "This role can view trips but cannot create new trip requests.";
+        setMessage(el("tripFormMessage"), message, "error");
+    }
     if (!offenceAllowed) setMessage(el("offenceMessage"), "This role can view discipline data but cannot record offences.", "error");
 };
 
@@ -1334,6 +1761,7 @@ const renderAll = () => {
     renderFleet();
     renderFarmers();
     renderDiscipline();
+    renderUsers();
     updateCostPreview();
     if (currentUser) applyRoleAccess();
 };
@@ -1350,14 +1778,32 @@ document.querySelectorAll("[name='customerType']").forEach((input) => {
     el(id).addEventListener("input", updateCostPreview);
 });
 
-el("tripDate").addEventListener("change", syncDeliveryDateMinimum);
+el("tripDate").addEventListener("change", () => {
+    syncDeliveryDateMinimum();
+    renderTripFormOptions();
+});
+el("deliveryDate").addEventListener("change", renderTripFormOptions);
 el("tripStatusFilter").addEventListener("change", renderTripTable);
 el("capacityFilter").addEventListener("input", renderFleet);
 el("tripForm").addEventListener("submit", handleTripSubmit);
 el("offenceForm").addEventListener("submit", handleOffenceSubmit);
 el("serviceRecordForm").addEventListener("submit", handleServiceRecordSubmit);
 el("tripReviewForm").addEventListener("submit", handleTripReviewSubmit);
+el("groupCreateForm").addEventListener("submit", handleGroupCreateSubmit);
+el("staffUserForm").addEventListener("submit", handleStaffUserSubmit);
 document.addEventListener("click", (event) => {
+    const joinGroupButton = event.target.closest("[data-join-group-id]");
+    if (joinGroupButton) {
+        handleGroupJoin(joinGroupButton);
+        return;
+    }
+
+    const statusButton = event.target.closest("[data-trip-status]");
+    if (statusButton) {
+        handleTripStatusUpdate(statusButton);
+        return;
+    }
+
     const tripRow = event.target.closest("[data-trip-id]");
     if (tripRow && !event.target.closest("[data-driver-trip-id]")) {
         selectedTripId = Number(tripRow.dataset.tripId);
@@ -1380,6 +1826,13 @@ document.addEventListener("click", (event) => {
     }
 });
 document.addEventListener("submit", (event) => {
+    const paymentForm = event.target.closest(".payment-form");
+    if (paymentForm) {
+        event.preventDefault();
+        handlePaymentSubmit(paymentForm);
+        return;
+    }
+
     const offenceForm = event.target.closest(".offence-edit-form");
     if (!offenceForm) return;
     event.preventDefault();
@@ -1396,6 +1849,11 @@ el("reviewTargetType").addEventListener("change", () => {
     if (!farmer) return;
     const trips = state.trips.filter((trip) => trip.farmerId === farmer.id || byId(state.groups, trip.groupId)?.members.includes(farmer.id));
     renderReviewFormOptions(trips);
+});
+document.addEventListener("change", (event) => {
+    const roleSelect = event.target.closest("[data-user-role-id]");
+    if (!roleSelect) return;
+    handleUserRoleUpdate(roleSelect);
 });
 el("loginForm").addEventListener("submit", handleLogin);
 el("farmerSignupForm").addEventListener("submit", handleFarmerSignup);

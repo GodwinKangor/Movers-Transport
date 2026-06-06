@@ -20,51 +20,59 @@ The MySQL trigger already enforces the trip status lifecycle:
 - `completed` and `cancelled` are final
 - vehicle status changes when a trip moves to `in_progress`, `completed`, or `cancelled`
 
-Still needed:
+Implemented:
 
-- `app.py`: add `PATCH /api/trips/<trip_id>/status`
-- `app.py`: restrict status changes to `system_admin` and `ops_manager`
-- frontend: add status action buttons in trip detail for admin/ops
-- frontend: keep farmer, driver, accountant, and HR status read-only
+- `app.py`: added `PATCH /api/trips/<trip_id>/status`
+- `app.py`: restricted status changes to `system_admin` and `ops_manager`
+- frontend: added status action buttons in trip detail for admin/ops
+- frontend: farmer, driver, accountant, and HR status remains read-only
 
 ## 2. Payment Rules
 
-Rules to clarify:
+Resolved scope:
 
-- Can customers make partial payments?
-- Can customers overpay?
-- Should payment be required before trip completion?
-- Who records payments: accountant only, or admin/ops too?
-- Should cancelled trips allow payments?
+- Customers can make partial payments.
+- Customers cannot overpay.
+- Payment is not required before trip completion.
+- Payments can be recorded by `accountant`, `system_admin`, and `ops_manager`.
+- Cancelled trips cannot accept payments.
 
-Recommended enforcement:
+Implemented:
 
-- MySQL trigger: block overpayments
-- MySQL trigger: block payments on cancelled trips
-- `app.py`: add `POST /api/payments`
-- `app.py`: restrict payment recording to `accountant`, `system_admin`, and maybe `ops_manager`
-- frontend: add accountant payment form
-- frontend: show payment status clearly as unpaid, partial, paid, or overpaid-blocked
+- `app.py`: added `POST /api/payments`
+- `app.py`: blocks overpayments and payments on cancelled trips before insert
+- `app.py`: restricts payment recording to `accountant`, `system_admin`, and `ops_manager`
+- frontend: added payment form in trip detail for allowed roles
+- frontend: shows payment status as unpaid, partial, or paid; overpayment is blocked before submit
 
 ## 3. Scheduling Conflicts
 
-Rules to clarify:
-
-- Can one driver have more than one active trip on the same pickup date?
-- Can one vehicle have more than one active trip on the same pickup date?
-- Can one loader have more than one active trip on the same pickup date?
-- Should conflicts use only pickup date, or pickup and delivery date range?
-
-Recommended simple rule:
+Resolved scope:
 
 - A driver, vehicle, or loader cannot be assigned to more than one non-cancelled trip whose pickup/delivery date ranges overlap.
 
-Recommended enforcement:
+Implemented:
 
-- MySQL trigger on `Trip`: block overlapping driver and vehicle assignments
-- MySQL trigger on `TripLoader`: block overlapping loader assignments
-- `app.py`: add friendly pre-checks before insert
+- `app.py`: added friendly pre-checks before insert
 - frontend: filter unavailable vehicles, drivers, and loaders after pickup/delivery date selection
+- frontend: rule checks flag overlapping driver, vehicle, or loader assignments
+
+## Small-Scale Farmer Group Onboarding
+
+Resolved scope:
+
+- Small-scale farmers cannot request individual trips.
+- Small-scale farmers can join an existing farmer group directly.
+- Small-scale farmers can create a new farmer group and become its chair.
+- A small-scale farmer can only request transport when they chair a group with at least 5 members.
+
+Implemented:
+
+- `app.py`: added `POST /api/groups`
+- `app.py`: added `POST /api/groups/<group_id>/join`
+- `app.py`: restricts group onboarding actions to small-scale farmer accounts
+- frontend: added group onboarding panel in the farmer portal
+- frontend: disables trip creation unless the farmer is large-scale or chairs an eligible group
 
 ## 4. Maintenance and Fuel Workflow
 
@@ -86,6 +94,7 @@ Recommended scope for now:
 - Keep completed trips returning vehicles to `available`
 - Treat `fueling`, `under_maintenance`, `out_of_service`, and `retired` as unavailable for trip assignment
 - Add a future maintenance-status workflow only if required for the project demo
+- Current app behavior matches this scope through available-vehicle filtering and backend assignment checks.
 
 ## 5. Offence Editing and Recalculation
 
@@ -111,6 +120,7 @@ Recommended enforcement:
 - Keep the current insert-based trigger model
 - In `app.py`, only allow HR/admin to edit offence details
 - Do not add delete/undo behavior unless the project specifically requires it
+- Current app behavior matches this scope.
 
 ## 6. Admin User Management
 
@@ -120,16 +130,15 @@ The project plan mentions system admin user/role management, but the app current
 - farmer signup
 - demo/admin account support
 
-Still needed if required:
+Implemented:
 
-- frontend: admin user list
+- frontend: system-admin-only user list
 - frontend: create staff user form
-- frontend: role assignment form
-- `app.py`: staff user creation endpoint
-- `app.py`: role update endpoint
-- MySQL constraints: valid roles and unique usernames
+- frontend: role assignment control for staff accounts
+- `app.py`: added `POST /api/users/staff`
+- `app.py`: added `PATCH /api/users/<user_id>/role`
+- `app.py`: keeps farmer-linked and driver-linked accounts out of staff role reassignment
 
-Recommended priority:
+Still recommended at database level:
 
-- Lower priority than status, payments, and scheduling conflicts.
-- Add only if the project rubric explicitly expects admin user management.
+- MySQL constraints for valid roles and unique usernames.

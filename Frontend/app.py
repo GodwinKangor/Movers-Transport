@@ -24,6 +24,7 @@ LOGIN_ROLES = {
     "driver",
     "farmer",
 }
+STAFF_ROLES = {"system_admin", "ops_manager", "accountant", "hr_manager"}
 
 
 def create_app():
@@ -188,6 +189,11 @@ def create_app():
                         conn.rollback()
                         return jsonify({"error": date_error}), 400
 
+                    assignment_error = validate_trip_assignment(conn, data, loaders)
+                    if assignment_error:
+                        conn.rollback()
+                        return jsonify({"error": assignment_error}), 400
+
                     if farmer_id and farmer_type(conn, farmer_id) != "large_scale":
                         conn.rollback()
                         return jsonify({"error": "Small-scale farmers must request transport through a farmer group."}), 400
@@ -221,6 +227,87 @@ def create_app():
                     return jsonify({"error": str(exc)}), 400
 
                 return jsonify({"tripId": trip_id, "state": load_bootstrap(conn, request.user)}), 201
+        except Error as exc:
+            return jsonify({"error": str(exc)}), 500
+
+    @app.patch("/api/trips/<int:trip_id>/status")
+    @require_auth
+    @require_roles("system_admin", "ops_manager")
+    def update_trip_status(trip_id):
+        data = request.get_json(force=True)
+        next_status = (data.get("status") or "").strip()
+        if next_status not in {"scheduled", "in_progress", "completed", "cancelled"}:
+            return jsonify({"error": "Choose a valid trip status."}), 400
+
+        try:
+            with get_connection() as conn:
+                conn.start_transaction()
+                try:
+                    current_status = trip_status(conn, trip_id)
+                    if current_status is None:
+                        conn.rollback()
+                        return jsonify({"error": "Trip not found."}), 404
+
+                    transition_error = validate_trip_status_transition(current_status, next_status)
+                    if transition_error:
+                        conn.rollback()
+                        return jsonify({"error": transition_error}), 400
+
+                    with conn.cursor() as cursor:
+                        cursor.execute(
+                            "UPDATE Trip SET trip_status = %s WHERE trip_id = %s",
+                            (next_status, trip_id),
+                        )
+                    conn.commit()
+                    return jsonify({"tripId": trip_id, "state": load_bootstrap(conn, request.user)})
+                except Error as exc:
+                    conn.rollback()
+                    return jsonify({"error": str(exc)}), 400
+        except Error as exc:
+            return jsonify({"error": str(exc)}), 500
+
+    @app.post("/api/payments")
+    @require_auth
+    @require_roles("system_admin", "ops_manager", "accountant")
+    def create_payment():
+        data = request.get_json(force=True)
+        if not data.get("tripId"):
+            return jsonify({"error": "tripId is required."}), 400
+
+        try:
+            amount = Decimal(str(data.get("amount", 0)))
+        except Exception:
+            return jsonify({"error": "Payment amount must be a number."}), 400
+        if amount <= 0:
+            return jsonify({"error": "Payment amount must be greater than zero."}), 400
+
+        method = (data.get("method") or "cash").strip()
+        if not method:
+            return jsonify({"error": "Payment method is required."}), 400
+
+        try:
+            with get_connection() as conn:
+                conn.start_transaction()
+                try:
+                    payment_error = validate_payment(conn, data["tripId"], amount)
+                    if payment_error:
+                        conn.rollback()
+                        return jsonify({"error": payment_error}), 400
+
+                    with conn.cursor() as cursor:
+                        cursor.execute(
+                            """
+                            INSERT INTO Payment (trip_id, payment_date, amount_paid, payment_method)
+                            VALUES (%s, CURRENT_DATE, %s, %s)
+                            """,
+                            (data["tripId"], amount, method),
+                        )
+                        payment_id = cursor.lastrowid
+                    conn.commit()
+                    return jsonify({"paymentId": payment_id, "state": load_bootstrap(conn, request.user)}), 201
+                except Error as exc:
+                    conn.rollback()
+                    return jsonify({"error": str(exc)}), 400
         except Error as exc:
             return jsonify({"error": str(exc)}), 500
 
@@ -329,6 +416,54 @@ def create_app():
         except Error as exc:
             return jsonify({"error": str(exc)}), 400
 
+    @app.post("/api/groups")
+    @require_auth
+    @require_roles("farmer")
+    def create_group():
+        data = request.get_json(force=True)
+        name = (data.get("name") or "").strip()
+        region = (data.get("region") or "").strip()
+        if not name or not region:
+            return jsonify({"error": "Group name and region are required."}), 400
+
+        try:
+            with get_connection() as conn:
+                farmer_id = request.user.get("farmerId")
+                if farmer_type(conn, farmer_id) != "small_scale":
+                    return jsonify({"error": "Only small-scale farmers can create farmer groups."}), 403
+
+                conn.start_transaction()
+                try:
+                    group_id = insert_farmer_group(conn, name, region)
+                    insert_group_membership(conn, group_id, farmer_id, "chair")
+                    conn.commit()
+                    return jsonify({"groupId": group_id, "state": load_bootstrap(conn, request.user)}), 201
+                except Error as exc:
+                    conn.rollback()
+                    return jsonify({"error": str(exc)}), 400
+        except Error as exc:
+            return jsonify({"error": str(exc)}), 500
+
+    @app.post("/api/groups/<int:group_id>/join")
+    @require_auth
+    @require_roles("farmer")
+    def join_group(group_id):
+        try:
+            with get_connection() as conn:
+                farmer_id = request.user.get("farmerId")
+                if farmer_type(conn, farmer_id) != "small_scale":
+                    return jsonify({"error": "Only small-scale farmers can join farmer groups."}), 403
+                if not group_exists(conn, group_id):
+                    return jsonify({"error": "Farmer group not found."}), 404
+                if farmer_is_group_member(conn, farmer_id, group_id):
+                    return jsonify({"error": "You are already a member of this group."}), 400
+
+                insert_group_membership(conn, group_id, farmer_id, "member")
+                conn.commit()
+                return jsonify({"groupId": group_id, "state": load_bootstrap(conn, request.user)})
+        except Error as exc:
+            return jsonify({"error": str(exc)}), 400
+
     @app.post("/api/reviews")
     @require_auth
     @require_roles("farmer")
@@ -354,6 +489,80 @@ def create_app():
                 review_id = insert_trip_review(conn, request.user["farmerId"], data, target_type, rating)
                 conn.commit()
                 return jsonify({"reviewId": review_id, "state": load_bootstrap(conn, request.user)}), 201
+        except Error as exc:
+            return jsonify({"error": str(exc)}), 400
+
+    @app.post("/api/users/staff")
+    @require_auth
+    @require_roles("system_admin")
+    def create_staff_user():
+        data = request.get_json(force=True)
+        username = (data.get("username") or "").strip()
+        password = data.get("password") or ""
+        role = (data.get("role") or "").strip()
+        if not username or not password or not role:
+            return jsonify({"error": "Username, password, and role are required."}), 400
+        if role not in STAFF_ROLES:
+            return jsonify({"error": "Staff role must be system_admin, ops_manager, accountant, or hr_manager."}), 400
+        if len(password) < 6:
+            return jsonify({"error": "Password must be at least 6 characters."}), 400
+
+        try:
+            with get_connection() as conn:
+                conn.start_transaction()
+                try:
+                    if find_user_by_username(conn, username):
+                        conn.rollback()
+                        return jsonify({"error": "Username is already taken."}), 409
+                    user_id = insert_app_user(
+                        conn,
+                        username=username,
+                        password=password,
+                        role=role,
+                        farmer_id=None,
+                        driver_id=None,
+                    )
+                    conn.commit()
+                    return jsonify({"userId": user_id, "state": load_bootstrap(conn, request.user)}), 201
+                except Error as exc:
+                    conn.rollback()
+                    return jsonify({"error": str(exc)}), 400
+        except Error as exc:
+            return jsonify({"error": str(exc)}), 500
+
+    @app.patch("/api/users/<int:user_id>/role")
+    @require_auth
+    @require_roles("system_admin")
+    def update_user_role(user_id):
+        data = request.get_json(force=True)
+        role = (data.get("role") or "").strip()
+        if role not in STAFF_ROLES:
+            return jsonify({"error": "Staff role must be system_admin, ops_manager, accountant, or hr_manager."}), 400
+        if user_id == request.user.get("id"):
+            return jsonify({"error": "Use another system admin account to change your own role."}), 400
+
+        try:
+            with get_connection() as conn:
+                with conn.cursor(dictionary=True) as cursor:
+                    cursor.execute(
+                        """
+                        SELECT user_id, farmer_id, driver_id
+                        FROM AppUser
+                        WHERE user_id = %s
+                        """,
+                        (user_id,),
+                    )
+                    user = cursor.fetchone()
+                    if not user:
+                        return jsonify({"error": "User not found."}), 404
+                    if user["farmer_id"] or user["driver_id"]:
+                        return jsonify({"error": "Only staff accounts can be reassigned through admin user management."}), 400
+                    cursor.execute(
+                        "UPDATE AppUser SET role = %s WHERE user_id = %s",
+                        (role, user_id),
+                    )
+                conn.commit()
+                return jsonify({"userId": user_id, "state": load_bootstrap(conn, request.user)})
         except Error as exc:
             return jsonify({"error": str(exc)}), 400
 
@@ -550,6 +759,19 @@ def normalize_row(row):
 
 
 def load_bootstrap(conn, user=None):
+    users = fetch_all(
+        conn,
+        """
+        SELECT user_id AS id,
+               username,
+               role,
+               farmer_id AS farmerId,
+               driver_id AS driverId
+        FROM AppUser
+        ORDER BY user_id
+        """,
+    )
+
     farmers = fetch_all(
         conn,
         """
@@ -766,6 +988,7 @@ def load_bootstrap(conn, user=None):
     )
 
     state = {
+        "users": users,
         "farmers": farmers,
         "groups": groups,
         "drivers": drivers,
@@ -791,11 +1014,17 @@ def filter_bootstrap_for_user(state, user):
         return state
 
     if user.get("role") in {"system_admin", "ops_manager"}:
-        return state
+        if user.get("role") == "system_admin":
+            return state
+        return {
+            **state,
+            "users": [],
+        }
 
     if user.get("role") == "accountant":
         return {
             **state,
+            "users": [],
             "farmers": [],
             "groups": [],
             "offences": [],
@@ -807,6 +1036,7 @@ def filter_bootstrap_for_user(state, user):
     if user.get("role") == "hr_manager":
         return {
             **state,
+            "users": [],
             "farmers": [],
             "groups": [],
             "fuelRecords": [],
@@ -823,6 +1053,7 @@ def filter_bootstrap_for_user(state, user):
         driver_trip_ids = {trip["id"] for trip in driver_trips}
         return {
             **state,
+            "users": [],
             "farmers": [],
             "groups": [],
             "drivers": [driver for driver in state["drivers"] if driver["id"] == driver_id],
@@ -851,8 +1082,9 @@ def filter_bootstrap_for_user(state, user):
 
     return {
         **state,
+        "users": [],
         "farmers": [farmer for farmer in state["farmers"] if farmer["id"] == farmer_id],
-        "groups": farmer_groups,
+        "groups": state["groups"],
         "trips": farmer_trips,
         "fuelRecords": [],
         "serviceRecords": [],
@@ -922,6 +1154,54 @@ def farmer_is_group_chair(conn, farmer_id, group_id):
         return cursor.fetchone()[0] > 0
 
 
+def farmer_is_group_member(conn, farmer_id, group_id):
+    if not farmer_id or not group_id:
+        return False
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT COUNT(*)
+            FROM GroupMembership
+            WHERE farmer_id = %s
+              AND group_id = %s
+            """,
+            (farmer_id, group_id),
+        )
+        return cursor.fetchone()[0] > 0
+
+
+def group_exists(conn, group_id):
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT COUNT(*) FROM FarmerGroup WHERE group_id = %s",
+            (group_id,),
+        )
+        return cursor.fetchone()[0] > 0
+
+
+def insert_farmer_group(conn, name, region):
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            INSERT INTO FarmerGroup (group_name, region)
+            VALUES (%s, %s)
+            """,
+            (name, region),
+        )
+        return cursor.lastrowid
+
+
+def insert_group_membership(conn, group_id, farmer_id, role):
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            INSERT INTO GroupMembership (group_id, farmer_id, role)
+            VALUES (%s, %s, %s)
+            """,
+            (group_id, farmer_id, role),
+        )
+
+
 def validate_trip_dates(conn, data):
     try:
         pickup_date = date.fromisoformat(str(data.get("tripDate")))
@@ -937,6 +1217,156 @@ def validate_trip_dates(conn, data):
         return "Pickup date must be at least 3 days from today."
     if delivery_date < pickup_date:
         return "Delivery date cannot be before pickup date."
+    return ""
+
+
+def validate_trip_assignment(conn, data, loader_ids):
+    vehicle_id = data.get("vehicleId")
+    driver_id = data.get("driverId")
+    try:
+        load_weight = Decimal(str(data.get("loadWeight", 0)))
+    except Exception:
+        return "Load weight must be a number."
+
+    with conn.cursor(dictionary=True) as cursor:
+        cursor.execute(
+            """
+            SELECT vehicle_id, status, load_capacity, assigned_driver_id
+            FROM Vehicle
+            WHERE vehicle_id = %s
+            """,
+            (vehicle_id,),
+        )
+        vehicle = cursor.fetchone()
+        if not vehicle:
+            return "Vehicle not found."
+        if vehicle["status"] != "available":
+            return "Vehicle must be available before trip assignment."
+        if load_weight > Decimal(str(vehicle["load_capacity"])):
+            return "Trip load exceeds vehicle capacity."
+        if vehicle["assigned_driver_id"] and int(vehicle["assigned_driver_id"]) != int(driver_id):
+            return "Trip driver must match the vehicle assigned driver."
+
+        cursor.execute(
+            "SELECT status FROM Driver WHERE driver_id = %s",
+            (driver_id,),
+        )
+        driver = cursor.fetchone()
+        if not driver:
+            return "Driver not found."
+        if driver["status"] != "active":
+            return "Driver must be active before trip assignment."
+
+    conflict = assignment_conflict(conn, data["tripDate"], data["deliveryDate"], driver_id=driver_id)
+    if conflict:
+        return f"Driver is already assigned to trip #{conflict} during those dates."
+
+    conflict = assignment_conflict(conn, data["tripDate"], data["deliveryDate"], vehicle_id=vehicle_id)
+    if conflict:
+        return f"Vehicle is already assigned to trip #{conflict} during those dates."
+
+    for loader_id in loader_ids:
+        conflict = assignment_conflict(conn, data["tripDate"], data["deliveryDate"], loader_id=loader_id)
+        if conflict:
+            return f"Loader {loader_id} is already assigned to trip #{conflict} during those dates."
+
+    return ""
+
+
+def assignment_conflict(conn, pickup_date, delivery_date, driver_id=None, vehicle_id=None, loader_id=None):
+    if loader_id:
+        query = """
+            SELECT t.trip_id
+            FROM Trip t
+            JOIN TripLoader tl ON t.trip_id = tl.trip_id
+            WHERE tl.loader_id = %s
+              AND t.trip_status <> 'cancelled'
+              AND NOT (t.delivery_date < %s OR t.trip_date > %s)
+            LIMIT 1
+        """
+        params = (loader_id, pickup_date, delivery_date)
+    elif driver_id:
+        query = """
+            SELECT trip_id
+            FROM Trip
+            WHERE driver_id = %s
+              AND trip_status <> 'cancelled'
+              AND NOT (delivery_date < %s OR trip_date > %s)
+            LIMIT 1
+        """
+        params = (driver_id, pickup_date, delivery_date)
+    else:
+        query = """
+            SELECT trip_id
+            FROM Trip
+            WHERE vehicle_id = %s
+              AND trip_status <> 'cancelled'
+              AND NOT (delivery_date < %s OR trip_date > %s)
+            LIMIT 1
+        """
+        params = (vehicle_id, pickup_date, delivery_date)
+
+    with conn.cursor() as cursor:
+        cursor.execute(query, params)
+        row = cursor.fetchone()
+    return row[0] if row else None
+
+
+def trip_status(conn, trip_id):
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT trip_status FROM Trip WHERE trip_id = %s",
+            (trip_id,),
+        )
+        row = cursor.fetchone()
+    return row[0] if row else None
+
+
+def validate_trip_status_transition(current_status, next_status):
+    if next_status == current_status:
+        return ""
+    allowed = {
+        "scheduled": {"in_progress", "cancelled"},
+        "in_progress": {"completed", "cancelled"},
+        "completed": set(),
+        "cancelled": set(),
+    }
+    if next_status not in allowed.get(current_status, set()):
+        return f"Cannot change trip status from {current_status.replace('_', ' ')} to {next_status.replace('_', ' ')}."
+    return ""
+
+
+def validate_payment(conn, trip_id, amount):
+    with conn.cursor(dictionary=True) as cursor:
+        cursor.execute(
+            """
+            SELECT trip_id, trip_status, total_cost
+            FROM Trip
+            WHERE trip_id = %s
+            """,
+            (trip_id,),
+        )
+        trip = cursor.fetchone()
+        if not trip:
+            return "Trip not found."
+        if trip["trip_status"] == "cancelled":
+            return "Cancelled trips cannot accept payments."
+
+        cursor.execute(
+            """
+            SELECT COALESCE(SUM(amount_paid), 0) AS paid
+            FROM Payment
+            WHERE trip_id = %s
+            """,
+            (trip_id,),
+        )
+        paid = cursor.fetchone()["paid"] or Decimal("0")
+
+    total = Decimal(str(trip["total_cost"]))
+    paid = Decimal(str(paid))
+    if paid + amount > total:
+        remaining = max(total - paid, Decimal("0"))
+        return f"Payment exceeds the remaining balance of {remaining:.2f}."
     return ""
 
 

@@ -8,6 +8,7 @@ The project was built as a CS 61 database project and lives in the `Frontend/` d
 
 - Role-based login for system admins, operations managers, accountants, HR managers, drivers, and farmers
 - Farmer self-signup with automatic account creation
+- Small-scale farmer onboarding to join an existing group or create a group as chair
 - Trip scheduling for large-scale individual farmers and eligible farmer groups
 - Group trip requests limited to the group's chair
 - Pickup and delivery date tracking with a minimum three-day pickup buffer
@@ -17,6 +18,7 @@ The project was built as a CS 61 database project and lives in the `Frontend/` d
 - Driver portal for assignments, assigned vehicle, service records, and discipline history
 - HR dashboard for driver status, offences, warnings, suspensions, and trip reviews
 - Farmer portal for profile details, trip requests, payments, and driver/loader reviews
+- System admin user management for listing accounts, creating staff users, and assigning staff roles
 - Flask API backed by MySQL, with browser-side demo data used as a fallback shape for the UI
 - MySQL trigger-backed rules for trip costs, trip status transitions, vehicle status changes, group trip rules, and driver discipline
 
@@ -116,16 +118,23 @@ If the database has no users yet, `app.py` can create a default demo system admi
 - `POST /api/signup/farmer` creates a farmer profile and login
 - `GET /api/me` returns the authenticated user
 - `GET /api/bootstrap` loads role-filtered application data
+- `POST /api/groups` creates a farmer group for a small-scale farmer
+- `POST /api/groups/<id>/join` joins a small-scale farmer to an existing group
 - `POST /api/trips` creates a trip request
+- `PATCH /api/trips/<id>/status` updates a trip status for admins and operations managers
+- `POST /api/payments` records a customer payment
 - `POST /api/offences` records a driver offence
 - `PATCH /api/offences/<id>` updates an offence
 - `POST /api/service-records` creates a maintenance record
 - `POST /api/reviews` creates a farmer review for a driver or loader
+- `POST /api/users/staff` creates a staff login for system admins
+- `PATCH /api/users/<id>/role` updates staff account roles for system admins
 
 ## Business Rules
 
 - Large-scale farmers can request individual trips.
 - Small-scale farmers must request trips through farmer groups.
+- Small-scale farmers can join an existing group or create a group as chair after signup.
 - Farmer groups must have at least five members before requesting transport.
 - Only a farmer group's `chair` can request transport for that group.
 - Trips require exactly one customer source: either one farmer or one group.
@@ -133,16 +142,18 @@ If the database has no users yet, `app.py` can create a default demo system admi
 - Delivery date cannot be before pickup date.
 - Trips require one vehicle, one active driver, and at least one loader.
 - Vehicles must be `available` before trip assignment.
+- Drivers, vehicles, and loaders cannot be double-booked across overlapping pickup/delivery date ranges for non-cancelled trips.
 - Trip costs are calculated by database trigger from base rate, distance, load weight, and tax.
 - Trip status follows `scheduled -> in_progress -> completed` or cancellation paths.
 - `completed` and `cancelled` trips are final.
 - Vehicle status becomes `in_transit` when a trip is in progress and `available` when completed or cancelled.
+- Customer payments can be partial, cannot exceed the remaining balance, and cannot be recorded for cancelled trips.
 - Driver discipline is trigger-backed: surcharge offences can create warnings, suspensions, and termination.
 - Terminated driver accounts cannot log in.
 
 ## Role Access
 
-- `system_admin`: full dashboard, trips, fleet, farmers, and discipline access
+- `system_admin`: full dashboard, trips, fleet, farmers, discipline, and staff user management access
 - `ops_manager`: operations-focused access to trips, fleet, farmers, and discipline
 - `accountant`: dashboard, trips, fleet, payroll-style summaries, and balances
 - `hr_manager`: HR dashboard and discipline management

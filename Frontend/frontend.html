@@ -109,6 +109,7 @@
                 <button class="nav-tab" data-view="fleet" type="button">Fleet</button>
                 <button class="nav-tab" data-view="farmers" type="button">Farmers</button>
                 <button class="nav-tab" data-view="discipline" type="button">Discipline</button>
+                <button class="nav-tab" data-view="users" type="button">Users</button>
             </nav>
 
             <div class="sidebar-note">
@@ -446,6 +447,28 @@
                         <div id="farmerProfileCard" class="profile-grid"></div>
                     </section>
 
+                    <section class="panel auth-hidden" id="smallScaleOnboardingPanel">
+                        <div class="panel-header">
+                            <h3>Group onboarding</h3>
+                            <span class="muted-label" id="groupOnboardingSummary"></span>
+                        </div>
+                        <div id="groupOnboardingList" class="stack-list"></div>
+                        <form class="form-panel compact-form" id="groupCreateForm">
+                            <div class="field-row">
+                                <label>
+                                    Group name
+                                    <input id="groupNameInput" type="text" required placeholder="Riverbend Growers">
+                                </label>
+                                <label>
+                                    Region
+                                    <input id="groupRegionInput" type="text" required placeholder="North Region">
+                                </label>
+                            </div>
+                            <div id="groupMessage" class="form-message" aria-live="polite"></div>
+                            <button class="primary-button" type="submit"><span>+</span> Create group as chair</button>
+                        </form>
+                    </section>
+
                     <section class="panel">
                         <div class="panel-header">
                             <h3>My payments</h3>
@@ -558,6 +581,44 @@
                         </label>
                         <div id="offenceMessage" class="form-message" aria-live="polite"></div>
                         <button class="primary-button full-width" type="submit"><span>!</span> Save offence</button>
+                    </form>
+                </div>
+            </section>
+
+            <section class="view" id="usersView" data-title="Users">
+                <div class="split-layout">
+                    <section class="panel">
+                        <div class="panel-header">
+                            <h3>User accounts</h3>
+                            <span class="muted-label" id="userSummary"></span>
+                        </div>
+                        <div id="userList" class="stack-list"></div>
+                    </section>
+
+                    <form class="panel form-panel" id="staffUserForm">
+                        <div class="panel-header">
+                            <h3>Create staff user</h3>
+                            <span class="muted-label">System admin only</span>
+                        </div>
+                        <label>
+                            Username
+                            <input id="staffUsernameInput" type="text" autocomplete="off" required placeholder="ops.maria">
+                        </label>
+                        <label>
+                            Password
+                            <input id="staffPasswordInput" type="password" minlength="6" required placeholder="At least 6 characters">
+                        </label>
+                        <label>
+                            Role
+                            <select id="staffRoleSelect" required>
+                                <option value="ops_manager">Operations manager</option>
+                                <option value="accountant">Accountant</option>
+                                <option value="hr_manager">HR manager</option>
+                                <option value="system_admin">System admin</option>
+                            </select>
+                        </label>
+                        <div id="staffUserMessage" class="form-message" aria-live="polite"></div>
+                        <button class="primary-button full-width" type="submit"><span>+</span> Create user</button>
                     </form>
                 </div>
             </section>

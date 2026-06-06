@@ -213,6 +213,14 @@ select {
     background: var(--green-dark);
 }
 
+.danger-button {
+    background: var(--red);
+}
+
+.danger-button:hover {
+    background: #8c312c;
+}
+
 .primary-button:disabled,
 .icon-button:disabled {
     cursor: not-allowed;
@@ -491,6 +499,10 @@ tbody tr[data-trip-id]:hover {
     gap: 14px;
 }
 
+.compact-form {
+    margin-top: 14px;
+}
+
 label {
     display: grid;
     gap: 6px;
@@ -657,6 +669,14 @@ select[multiple] {
     text-align: right;
 }
 
+.inline-role {
+    min-width: 190px;
+}
+
+.inline-role select {
+    min-height: 36px;
+}
+
 .detail-panel {
     display: grid;
     gap: 14px;
@@ -664,6 +684,12 @@ select[multiple] {
 
 .detail-section {
     display: grid;
+    gap: 10px;
+}
+
+.action-row {
+    display: flex;
+    flex-wrap: wrap;
     gap: 10px;
 }
 
@@ -735,7 +761,7 @@ select[multiple] {
     }
 
     .nav-tabs {
-        grid-template-columns: repeat(5, minmax(0, 1fr));
+        grid-template-columns: repeat(6, minmax(0, 1fr));
         overflow-x: auto;
     }
 

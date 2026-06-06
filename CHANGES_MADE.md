@@ -23,14 +23,17 @@ This document summarizes the main project changes made after the initial README 
 
 - Added support for group roles from `GroupMembership.role`.
 - Added `chairId` and `memberRoles` to group data returned from `/api/bootstrap`.
+- Added small-scale farmer onboarding to join existing groups or create a group as chair.
+- Added `POST /api/groups` and `POST /api/groups/<id>/join` for small-scale farmer group onboarding.
 - Added `Trip.requested_by_farmer_id` support in the backend.
 - Enforced that small-scale farmers cannot request individual trips.
 - Enforced that group trips must be requested by the group chair.
 - Kept regular group members able to view their group trips.
 - Updated the frontend trip form:
   - large-scale farmers can request individual trips
-  - small-scale chair farmers can request group trips
+  - small-scale chair farmers can request group trips only when their group has at least 5 members
   - non-chair group members cannot request group trips
+- Added a farmer portal group onboarding panel with current memberships, join actions, and group creation.
 - Verified chair/member behavior through Flask API tests and rollback-only MySQL tests.
 
 ## Pickup and Delivery Dates
@@ -55,7 +58,26 @@ This document summarizes the main project changes made after the initial README 
   - `in_progress` sets vehicle status to `in_transit`
   - `completed` or `cancelled` sets vehicle status to `available`
 - Fixed the frontend trip status filter value from `in_transit` to `in_progress`.
+- Added `PATCH /api/trips/<id>/status` for system admins and operations managers.
+- Added trip-detail status action buttons for allowed status transitions.
 - Verified the lifecycle and vehicle status triggers with rollback-only tests.
+
+## Payments and Scheduling Conflicts
+
+- Added `POST /api/payments` for accountants, system admins, and operations managers.
+- Allowed partial customer payments while blocking overpayments and payments on cancelled trips.
+- Added trip-detail payment status, payment history, and a payment recording form for allowed roles.
+- Added backend pre-checks for overlapping driver, vehicle, and loader assignments across pickup/delivery ranges.
+- Filtered unavailable drivers, vehicles, and loaders after pickup/delivery date selection in the frontend.
+- Added a frontend rule check for overlapping assignments.
+
+## Admin User Management
+
+- Added public user account data to system-admin bootstrap responses.
+- Added `POST /api/users/staff` for system admins to create staff login accounts.
+- Added `PATCH /api/users/<id>/role` for system admins to reassign staff roles.
+- Added a system-admin-only Users tab with account listing, staff creation, and role assignment.
+- Protected farmer-linked and driver-linked accounts from staff role reassignment.
 
 ## Validation and Testing
 
@@ -73,5 +95,6 @@ The current app expects these database updates to exist:
 - updated trip insert/update triggers
 - trip vehicle-status update trigger
 - offence discipline trigger
+- optional database triggers to enforce payment overpay/cancel rules and scheduling conflicts as the final source of truth
 
 The app depends on MySQL triggers as the final source of truth for core business rules, with Flask and frontend validation providing clearer user-facing errors.
