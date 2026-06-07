@@ -135,7 +135,7 @@
                 </button>
                 <button class="nav-tab" data-view="fleet" type="button">
                     <span class="nav-label">Fleet</span>
-                    <span class="nav-hint">Vehicles &amp; payroll</span>
+                    <span class="nav-hint">Vehicles &amp; staff</span>
                 </button>
                 <button class="nav-tab" data-view="farmers" type="button">
                     <span class="nav-label">Farmers</span>
@@ -515,7 +515,13 @@
             </section>
 
             <section class="view" id="fleetView" data-title="Fleet">
-                <div class="panel fleet-panel">
+                <div class="fleet-tabs" role="tablist" aria-label="Fleet sections">
+                    <button class="fleet-tab active" data-fleet-tab="vehicles" type="button" role="tab" aria-selected="true">Vehicles</button>
+                    <button class="fleet-tab" data-fleet-tab="drivers" type="button" role="tab" aria-selected="false">Drivers</button>
+                    <button class="fleet-tab" data-fleet-tab="loaders" type="button" role="tab" aria-selected="false">Loaders</button>
+                </div>
+
+                <div class="panel fleet-panel fleet-pane" data-fleet-pane="vehicles">
                     <div class="panel-header">
                         <h3>Vehicles</h3>
                         <div class="filter-controls">
@@ -533,29 +539,67 @@
                 </div>
 
                 <div class="payroll-panel auth-hidden" id="payrollPanel">
-                    <section class="panel">
+                    <section class="panel fleet-pane auth-hidden" data-fleet-pane="drivers">
                         <div class="panel-header">
-                            <h3>Driver pay</h3>
+                            <h3>Driver roster</h3>
                             <div class="filter-controls">
                                 <label class="inline-filter">
                                     Search
                                     <input id="driverSearchInput" type="search" placeholder="Driver name">
                                 </label>
-                                <span class="muted-label">Ops edits pay; admin terminates</span>
+                                <span class="muted-label">Availability, assignments, and pay access</span>
                             </div>
                         </div>
+                        <form class="roster-create-form auth-hidden" id="driverCreateForm">
+                            <div class="field-row">
+                                <label>
+                                    First name
+                                    <input id="driverFirstNameInput" type="text" required placeholder="Emmanuel">
+                                </label>
+                                <label>
+                                    Last name
+                                    <input id="driverLastNameInput" type="text" required placeholder="Tetteh">
+                                </label>
+                            </div>
+                            <div class="field-row">
+                                <label>
+                                    Phone
+                                    <input id="driverPhoneInput" type="tel" required placeholder="555-0501">
+                                </label>
+                                <label>
+                                    Hire date
+                                    <input id="driverHireDateInput" type="date" required>
+                                </label>
+                            </div>
+                            <div class="field-row">
+                                <label>
+                                    Salary rate
+                                    <input id="driverSalaryRateInput" type="number" min="0" step="0.01" required placeholder="29.00">
+                                </label>
+                                <label>
+                                    Login username
+                                    <input id="driverUsernameInput" type="text" autocomplete="off" required placeholder="driver.emmanuel">
+                                </label>
+                            </div>
+                            <label>
+                                Login password
+                                <input id="driverPasswordInput" type="password" minlength="6" required placeholder="At least 6 characters">
+                            </label>
+                            <div id="driverCreateMessage" class="form-message" aria-live="polite"></div>
+                            <button class="primary-button" type="submit"><span>+</span> Add driver</button>
+                        </form>
                         <div id="driverPayList" class="stack-list"></div>
                     </section>
 
-                    <section class="panel">
+                    <section class="panel fleet-pane auth-hidden" data-fleet-pane="loaders">
                         <div class="panel-header">
-                            <h3>Loader pay</h3>
+                            <h3>Loader roster</h3>
                             <div class="filter-controls">
                                 <label class="inline-filter">
                                     Search
                                     <input id="loaderSearchInput" type="search" placeholder="Loader name">
                                 </label>
-                                <span class="muted-label">Ops edits rates; admin terminates</span>
+                                <span class="muted-label">Availability, assignments, and pay access</span>
                             </div>
                         </div>
                         <div id="loaderPayList" class="stack-list"></div>

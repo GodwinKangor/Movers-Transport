@@ -714,6 +714,57 @@ def create_app():
         except Error as exc:
             return jsonify({"error": str(exc)}), 500
 
+    @app.post("/api/drivers")
+    @require_auth
+    @require_roles("system_admin", "ops_manager")
+    def create_driver():
+        data = request.get_json(force=True)
+        required = ["firstName", "lastName", "phone", "hireDate", "salaryRate", "username", "password"]
+        missing = [field for field in required if data.get(field) in (None, "")]
+        if missing:
+            return jsonify({"error": f"Missing fields: {', '.join(missing)}"}), 400
+
+        first_name = (data.get("firstName") or "").strip()
+        last_name = (data.get("lastName") or "").strip()
+        phone = (data.get("phone") or "").strip()
+        username = (data.get("username") or "").strip()
+        password = data.get("password") or ""
+        if not first_name or not last_name or not phone or not username:
+            return jsonify({"error": "Driver name, phone, and username cannot be blank."}), 400
+        pay_rate = parse_nonnegative_amount(data.get("salaryRate"), "Salary rate")
+        if isinstance(pay_rate, tuple):
+            return jsonify({"error": pay_rate[0]}), pay_rate[1]
+        try:
+            hire_date = date.fromisoformat(str(data.get("hireDate")))
+        except (TypeError, ValueError):
+            return jsonify({"error": "Hire date must use YYYY-MM-DD format."}), 400
+        if len(password) < 6:
+            return jsonify({"error": "Password must be at least 6 characters."}), 400
+
+        try:
+            with get_connection() as conn:
+                conn.start_transaction()
+                try:
+                    if find_user_by_username(conn, username):
+                        conn.rollback()
+                        return jsonify({"error": "Username is already taken."}), 409
+                    driver_id = insert_driver(conn, data, hire_date, pay_rate)
+                    user_id = insert_app_user(
+                        conn,
+                        username=username,
+                        password=password,
+                        role="driver",
+                        farmer_id=None,
+                        driver_id=driver_id,
+                    )
+                    conn.commit()
+                    return jsonify({"driverId": driver_id, "userId": user_id, "state": load_bootstrap(conn, request.user)}), 201
+                except Error as exc:
+                    conn.rollback()
+                    return jsonify({"error": str(exc)}), 400
+        except Error as exc:
+            return jsonify({"error": str(exc)}), 500
+
     @app.patch("/api/users/<int:user_id>/role")
     @require_auth
     @require_roles("system_admin")
@@ -876,6 +927,24 @@ def insert_farmer(conn, data):
                 data["phone"].strip(),
                 data["address"].strip(),
                 data["farmerType"].strip(),
+            ),
+        )
+        return cursor.lastrowid
+
+
+def insert_driver(conn, data, hire_date, salary_rate):
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            INSERT INTO Driver (first_name, last_name, phone, hire_date, salary_rate, status)
+            VALUES (%s, %s, %s, %s, %s, 'active')
+            """,
+            (
+                data["firstName"].strip(),
+                data["lastName"].strip(),
+                data["phone"].strip(),
+                hire_date,
+                salary_rate,
             ),
         )
         return cursor.lastrowid

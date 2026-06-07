@@ -107,6 +107,7 @@ let currentUser = null;
 let selectedTripId = null;
 let selectedDriverTripId = null;
 let selectedHrDriverId = null;
+let activeFleetTab = "vehicles";
 
 const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
 const toDateInputValue = (date) => {
@@ -210,7 +211,7 @@ const updateConnectionStatus = () => {
 const viewSubtitles = {
     dashboard: "Operations overview, trip manifest, and business rule checks",
     trips: "Create trip requests, review workload, and update trip status",
-    fleet: "Vehicle capacity, maintenance costs, and payroll summaries",
+    fleet: "Vehicles, staff rosters, maintenance costs, and payroll summaries",
     farmers: "Farmer profiles, groups, payments, and trip reviews",
     discipline: "Driver discipline records, offences, warnings, and suspensions",
     users: "Staff account management and role assignment"
@@ -1209,16 +1210,18 @@ const renderPayroll = () => {
     const canTerminate = canTerminateEmployment();
     const driverQuery = el("driverSearchInput").value;
     const loaderQuery = el("loaderSearchInput").value;
-    el("payrollPanel").classList.toggle("auth-hidden", !canSeePayroll);
-    if (!canSeePayroll) {
-        el("driverPayList").innerHTML = "";
-        el("loaderPayList").innerHTML = "";
-        return;
+    el("driverCreateForm").classList.toggle("auth-hidden", !canEditEmployment);
+    el("driverCreateForm").querySelectorAll("input, button").forEach((field) => {
+        field.disabled = !canEditEmployment;
+    });
+    if (!el("driverHireDateInput").value) {
+        el("driverHireDateInput").value = today;
     }
 
     const drivers = state.drivers.filter((driver) => searchMatches(driverQuery, [driver.name, driver.status, driver.phone]));
     el("driverPayList").innerHTML = drivers.length ? drivers.map((driver) => {
         const assignedTrips = state.trips.filter((trip) => trip.driverId === driver.id);
+        const assignedVehicle = state.vehicles.find((vehicle) => vehicle.assignedDriverId === driver.id);
         return canEditEmployment ? `
             <form class="list-item payroll-edit-form" data-driver-pay-id="${driver.id}">
                 <div>
@@ -1242,12 +1245,14 @@ const renderPayroll = () => {
             <article class="list-item">
                 <div>
                     <strong>${driver.name}</strong>
-                    <p>${assignedTrips.length} assigned trips - ${statusText(driver.status)}</p>
+                    <p>${assignedVehicle ? assignedVehicle.plate : "No assigned vehicle"} - ${assignedTrips.length} assigned trips</p>
                 </div>
-                <div class="amount-stack">
-                    <span>Salary rate</span>
-                    <strong>${money.format(driver.salaryRate)}</strong>
-                </div>
+                ${canSeePayroll ? `
+                    <div class="amount-stack">
+                        <span>Salary rate</span>
+                        <strong>${money.format(driver.salaryRate)}</strong>
+                    </div>
+                ` : renderBadge(driver.status)}
             </article>
         `;
     }).join("") : renderEmptyState("No drivers match", "Clear the driver search to see all drivers.", "D");
@@ -1281,10 +1286,12 @@ const renderPayroll = () => {
                     <strong>${loader.name}</strong>
                     <p>${payments.length} trip payments recorded - ${statusText(loader.status || "active")}</p>
                 </div>
-                <div class="amount-stack">
-                    <span>${money.format(loader.rate)} rate</span>
-                    <strong>${money.format(totalPaid)}</strong>
-                </div>
+                ${canSeePayroll ? `
+                    <div class="amount-stack">
+                        <span>${money.format(loader.rate)} rate</span>
+                        <strong>${money.format(totalPaid)}</strong>
+                    </div>
+                ` : renderBadge(loader.status || "active")}
             </article>
         `;
     }).join("") : renderEmptyState("No loaders match", "Clear the loader search to see all loaders.", "L");
@@ -1929,6 +1936,83 @@ const handleOffenceDelete = async (button) => {
     renderAll();
 };
 
+const handleDriverCreateSubmit = async (event) => {
+    event.preventDefault();
+    if (!canManageEmployment()) {
+        setMessage(el("driverCreateMessage"), "Only system admins and operations managers can add drivers.", "error");
+        return;
+    }
+
+    const salaryRate = Number(el("driverSalaryRateInput").value);
+    const driver = {
+        firstName: el("driverFirstNameInput").value.trim(),
+        lastName: el("driverLastNameInput").value.trim(),
+        phone: el("driverPhoneInput").value.trim(),
+        hireDate: el("driverHireDateInput").value,
+        salaryRate,
+        username: el("driverUsernameInput").value.trim(),
+        password: el("driverPasswordInput").value
+    };
+    if (!driver.firstName || !driver.lastName || !driver.phone || !driver.hireDate || !driver.username || !driver.password) {
+        setMessage(el("driverCreateMessage"), "Driver details and login credentials are required.", "error");
+        return;
+    }
+    if (Number.isNaN(salaryRate) || salaryRate < 0) {
+        setMessage(el("driverCreateMessage"), "Salary rate cannot be negative.", "error");
+        return;
+    }
+    if (driver.password.length < 6) {
+        setMessage(el("driverCreateMessage"), "Password must be at least 6 characters.", "error");
+        return;
+    }
+
+    if (apiAvailable) {
+        try {
+            const payload = await withLoading("Adding driver...", () => apiRequest("/api/drivers", {
+                method: "POST",
+                body: JSON.stringify(driver)
+            }));
+            replaceState(payload.state);
+            setMessage(el("driverCreateMessage"), `Driver #${payload.driverId} added.`, "success");
+            showToast("Driver added", `${driver.firstName} ${driver.lastName} can now sign in.`);
+            event.target.reset();
+            el("driverHireDateInput").value = today;
+        } catch (error) {
+            setMessage(el("driverCreateMessage"), error.message, "error");
+        }
+        return;
+    }
+
+    if (state.users.some((user) => user.username === driver.username)) {
+        setMessage(el("driverCreateMessage"), "Username is already taken.", "error");
+        return;
+    }
+    if (state.drivers.some((item) => item.phone === driver.phone)) {
+        setMessage(el("driverCreateMessage"), "Driver phone is already in use.", "error");
+        return;
+    }
+    const driverId = nextId(state.drivers);
+    state.drivers.push({
+        id: driverId,
+        name: `${driver.firstName} ${driver.lastName}`,
+        phone: driver.phone,
+        status: "active",
+        salaryRate
+    });
+    state.users.push({
+        id: nextId(state.users),
+        username: driver.username,
+        role: "driver",
+        farmerId: null,
+        driverId
+    });
+    setMessage(el("driverCreateMessage"), "Driver added in demo data.", "success");
+    showToast("Driver added", `${driver.firstName} ${driver.lastName} can now sign in.`);
+    event.target.reset();
+    el("driverHireDateInput").value = today;
+    renderAll();
+};
+
 const handleDriverPayUpdate = async (form) => {
     const driverId = Number(form.dataset.driverPayId);
     const driver = byId(state.drivers, driverId);
@@ -2320,6 +2404,19 @@ const switchView = (viewName) => {
     });
 };
 
+const switchFleetTab = (tabName) => {
+    activeFleetTab = tabName;
+    document.querySelectorAll("[data-fleet-tab]").forEach((tab) => {
+        const active = tab.dataset.fleetTab === tabName;
+        tab.classList.toggle("active", active);
+        tab.setAttribute("aria-selected", active ? "true" : "false");
+    });
+    document.querySelectorAll("[data-fleet-pane]").forEach((pane) => {
+        pane.classList.toggle("auth-hidden", pane.dataset.fleetPane !== tabName);
+    });
+    el("payrollPanel").classList.toggle("auth-hidden", tabName === "vehicles");
+};
+
 const applyRoleAccess = () => {
     const tripAllowed = canRequestTransport();
     const offenceAllowed = canRecordOffences();
@@ -2379,6 +2476,10 @@ document.querySelectorAll(".nav-tab").forEach((button) => {
     button.addEventListener("click", () => switchView(button.dataset.view));
 });
 
+document.querySelectorAll("[data-fleet-tab]").forEach((button) => {
+    button.addEventListener("click", () => switchFleetTab(button.dataset.fleetTab));
+});
+
 document.querySelectorAll("[name='customerType']").forEach((input) => {
     input.addEventListener("change", renderTripFormOptions);
 });
@@ -2402,6 +2503,7 @@ el("offenceForm").addEventListener("submit", handleOffenceSubmit);
 el("serviceRecordForm").addEventListener("submit", handleServiceRecordSubmit);
 el("tripReviewForm").addEventListener("submit", handleTripReviewSubmit);
 el("groupCreateForm").addEventListener("submit", handleGroupCreateSubmit);
+el("driverCreateForm").addEventListener("submit", handleDriverCreateSubmit);
 el("staffUserForm").addEventListener("submit", handleStaffUserSubmit);
 document.addEventListener("click", (event) => {
     const joinGroupButton = event.target.closest("[data-join-group-id]");

@@ -569,6 +569,7 @@ select {
 }
 
 .metric-card {
+    min-width: 0;
     padding: 16px;
 }
 
@@ -581,6 +582,9 @@ select {
     display: block;
     margin-top: 8px;
     font-size: 1.7rem;
+    line-height: 1.05;
+    max-width: 100%;
+    overflow-wrap: anywhere;
 }
 
 .split-layout,
@@ -593,7 +597,7 @@ select {
 .payroll-panel {
     display: grid;
     gap: 18px;
-    margin-top: 18px;
+    margin-top: 0;
 }
 
 .panel-stack {
@@ -804,6 +808,20 @@ tbody tr[data-trip-id] td:last-child {
     line-height: 1.4;
 }
 
+.roster-create-form {
+    display: grid;
+    gap: 12px;
+    margin-bottom: 14px;
+    padding: 14px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #fbfcfa;
+}
+
+.roster-create-form .primary-button {
+    justify-self: start;
+}
+
 .panel-hint {
     margin: -6px 0 14px;
     color: var(--muted);
@@ -958,6 +976,7 @@ select:focus-visible {
 .primary-button:focus-visible,
 .ghost-button:focus-visible,
 .nav-tab:focus-visible,
+.fleet-tab:focus-visible,
 .list-button:focus-visible {
     outline: 2px solid var(--green);
     outline-offset: 2px;
@@ -1004,6 +1023,34 @@ select[multiple] {
 
 .segmented-control input:checked + span {
     background: white;
+    box-shadow: 0 1px 7px rgba(23, 32, 27, 0.12);
+}
+
+.fleet-tabs {
+    display: inline-flex;
+    align-self: flex-start;
+    gap: 6px;
+    padding: 4px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #eef2ef;
+}
+
+.fleet-tab {
+    min-height: 38px;
+    padding: 0 18px;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    font: inherit;
+    font-weight: 800;
+}
+
+.fleet-tab.active {
+    background: white;
+    color: var(--ink);
     box-shadow: 0 1px 7px rgba(23, 32, 27, 0.12);
 }
 
@@ -1367,6 +1414,15 @@ select[multiple] {
     .inline-filter,
     .inline-filter input {
         width: 100%;
+    }
+
+    .fleet-tabs {
+        width: 100%;
+    }
+
+    .fleet-tab {
+        flex: 1;
+        padding: 0 10px;
     }
 
     .fleet-scroll {
