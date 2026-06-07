@@ -1,62 +1,57 @@
 # Movers Transport System
 
-Movers Transport System is a Flask and MySQL web application for managing agricultural transport operations. It provides a role-based operations console for trip scheduling, fleet visibility, farmer customers, payroll-oriented summaries, driver discipline records, maintenance entries, and farmer trip reviews.
+This is our CS 61 database project. It's a Flask + MySQL web app for managing
+agricultural transport: scheduling trips, tracking vehicles and drivers, handling
+farmer customers, payments, and driver discipline. The app code lives in the
+`Frontend/` directory and the SQL files are in `database/`.
 
-The project was built as a CS 61 database project and lives in the `Frontend/` directory.
+## What it does
 
-## Features
+- Role-based login for system admins, ops managers, accountants, HR managers, drivers, and farmers
+- Farmers can sign up themselves; small-scale farmers join or start a group
+- Trip scheduling with cost, tax, and balance calculated automatically
+- Fleet view with vehicle capacity, fuel, and maintenance info
+- Driver portal for assignments, vehicle, service records, and discipline history
+- HR view for offences, warnings, and suspensions
+- Payments (including partial payments) and farmer reviews of drivers/loaders
 
-- Role-based login for system admins, operations managers, accountants, HR managers, drivers, and farmers
-- Farmer self-signup with automatic account creation
-- Small-scale farmer onboarding to join an existing group or create a group as chair
-- Trip scheduling for large-scale individual farmers and eligible farmer groups
-- Group trip requests limited to the group's chair
-- Pickup and delivery date tracking with a minimum three-day pickup buffer
-- Automatic transport cost, tax, and balance calculations
-- Fleet dashboard with vehicle capacity, fuel, maintenance, and assigned driver information
-- Farmer directory and group eligibility checks
-- Driver portal for assignments, assigned vehicle, service records, and discipline history
-- HR dashboard for driver status, offences, warnings, suspensions, and trip reviews
-- Farmer portal for profile details, trip requests, payments, and driver/loader reviews
-- System admin user management for listing accounts, creating staff users, and assigning staff roles
-- Flask API backed by MySQL, with browser-side demo data used as a fallback shape for the UI
-- MySQL trigger-backed rules for trip costs, trip status transitions, vehicle status changes, group trip rules, and driver discipline
+Most of the rules are enforced in MySQL with triggers (see below).
 
-## Project Structure
+## Main business rules
 
-```text
-Frontend/
-├── app.py                         # Flask app, API routes, auth, and MySQL queries
-├── frontend.html                  # Main single-page application markup
-├── frontend_app.js                # UI state, rendering, validation, and API calls
-├── frontend_styles.css            # Application styling
-├── account_test_credentials.txt   # Demo/test login accounts
-├── .env                           # Local environment variables, not committed
-└── Project Plan.pdf               # Project planning document
-```
+- Large-scale farmers request trips on their own; small-scale farmers go through a group
+- A group needs at least 5 members, and only the group chair can request a trip
+- Pickup date must be at least 3 days out, and delivery can't be before pickup
+- A trip needs one vehicle, one active driver, and at least one loader
+- Vehicles must be `available`, and nothing can be double-booked on overlapping dates
+- Trip cost is computed by trigger from base rate, distance, weight, and tax
+- Status goes `scheduled -> in_progress -> completed` (or cancelled); completed/cancelled are final
+- Vehicle status flips to `in_transit` during a trip and back to `available` after
+- Payments can't exceed the remaining balance and can't be made on cancelled trips
+- Driver offences can lead to warnings, suspension, or termination; terminated drivers can't log in
 
-Additional project notes:
+## Database setup
 
-```text
-BUSINESS_RULES_TODO.md             # Remaining business rules and recommended order
-CHANGES_MADE.md                    # Summary of completed rule/app changes
-```
+The SQL files are in `database/`. Load them into MySQL **in this order**:
 
-## Requirements
+1. `schema.sql` — tables and views
+2. `seed.sql` — sample data
+3. `triggers.sql` — business-rule triggers
 
-- Python 3.10+
-- MySQL Server
-- A MySQL database with the application tables created
+Order matters: the trip triggers reject pickup dates less than 3 days from today,
+so the historical sample data has to be loaded *before* the triggers.
 
-Python packages:
+## Running the app locally
+
+Requirements: Python 3.10+ and a running MySQL server.
+
+Install the Python packages:
 
 ```bash
 pip install flask python-dotenv mysql-connector-python
 ```
 
-## Configuration
-
-Create `Frontend/.env` with your local database and app settings:
+Create `Frontend/.env` with your database settings:
 
 ```env
 MOVERS_DB_HOST=127.0.0.1
@@ -66,7 +61,6 @@ MOVERS_DB_PASSWORD=your_mysql_password
 MOVERS_DB_NAME=movers_transport
 
 MOVERS_SECRET_KEY=change-this-to-a-long-random-secret
-MOVERS_TOKEN_MAX_AGE_SECONDS=28800
 MOVERS_BASE_RATE=0.75
 
 MOVERS_DEMO_USERNAME=admin
@@ -74,94 +68,23 @@ MOVERS_DEMO_PASSWORD=password
 PORT=5001
 ```
 
-The Flask app expects tables such as `AppUser`, `Farmer`, `FarmerGroup`, `GroupMembership`, `Driver`, `Loader`, `Vehicle`, `Trip`, `TripLoader`, `Payment`, `FuelRecord`, `ServiceRecord`, `Offence`, `WarningLetter`, `Suspension`, and `TripReview`.
+**Do not commit `Frontend/.env`** — it has the database password and app secret.
 
-The current app also expects `Trip` to include `requested_by_farmer_id` and `delivery_date`, and expects MySQL triggers to enforce core business rules.
-
-## Running Locally
-
-From the repository root:
+Then run:
 
 ```bash
 cd Frontend
 python app.py
 ```
 
-Then open:
+Open http://127.0.0.1:5001 in a browser. (Open it through Flask, not by opening
+`frontend.html` directly, or the API calls won't work.) You can check the database
+connection at http://127.0.0.1:5001/api/health.
 
-```text
-http://127.0.0.1:5001
-```
+## Test accounts
 
-You can also check API/database connectivity at:
+Demo login details are in `Frontend/account_test_credentials.txt`. Pick the matching
+role in the login form's dropdown when signing in. These are for the class demo only.
 
-```text
-http://127.0.0.1:5001/api/health
-```
-
-## Test Accounts
-
-Demo account details are listed in:
-
-```text
-Frontend/account_test_credentials.txt
-```
-
-Use the matching role in the login form's role dropdown when signing in. These credentials are for class-project/demo use only and should not be used in production.
-
-If the database has no users yet, `app.py` can create a default demo system admin when the configured `MOVERS_DEMO_USERNAME` and `MOVERS_DEMO_PASSWORD` are used.
-
-## Main API Routes
-
-- `GET /api/health` checks MySQL connectivity
-- `POST /api/login` authenticates a user and returns a signed session token
-- `POST /api/signup/farmer` creates a farmer profile and login
-- `GET /api/me` returns the authenticated user
-- `GET /api/bootstrap` loads role-filtered application data
-- `POST /api/groups` creates a farmer group for a small-scale farmer
-- `POST /api/groups/<id>/join` joins a small-scale farmer to an existing group
-- `POST /api/trips` creates a trip request
-- `PATCH /api/trips/<id>/status` updates a trip status for admins and operations managers
-- `POST /api/payments` records a customer payment
-- `POST /api/offences` records a driver offence
-- `PATCH /api/offences/<id>` updates an offence
-- `POST /api/service-records` creates a maintenance record
-- `POST /api/reviews` creates a farmer review for a driver or loader
-- `POST /api/users/staff` creates a staff login for system admins
-- `PATCH /api/users/<id>/role` updates staff account roles for system admins
-
-## Business Rules
-
-- Large-scale farmers can request individual trips.
-- Small-scale farmers must request trips through farmer groups.
-- Small-scale farmers can join an existing group or create a group as chair after signup.
-- Farmer groups must have at least five members before requesting transport.
-- Only a farmer group's `chair` can request transport for that group.
-- Trips require exactly one customer source: either one farmer or one group.
-- Trips require a pickup date at least three days from the database server's current date.
-- Delivery date cannot be before pickup date.
-- Trips require one vehicle, one active driver, and at least one loader.
-- Vehicles must be `available` before trip assignment.
-- Drivers, vehicles, and loaders cannot be double-booked across overlapping pickup/delivery date ranges for non-cancelled trips.
-- Trip costs are calculated by database trigger from base rate, distance, load weight, and tax.
-- Trip status follows `scheduled -> in_progress -> completed` or cancellation paths.
-- `completed` and `cancelled` trips are final.
-- Vehicle status becomes `in_transit` when a trip is in progress and `available` when completed or cancelled.
-- Customer payments can be partial, cannot exceed the remaining balance, and cannot be recorded for cancelled trips.
-- Driver discipline is trigger-backed: surcharge offences can create warnings, suspensions, and termination.
-- Terminated driver accounts cannot log in.
-
-## Role Access
-
-- `system_admin`: full dashboard, trips, fleet, farmers, discipline, and staff user management access
-- `ops_manager`: operations-focused access to trips, fleet, farmers, and discipline
-- `accountant`: dashboard, trips, fleet, payroll-style summaries, and balances
-- `hr_manager`: HR dashboard and discipline management
-- `driver`: assigned trips, assigned vehicle, service records, and discipline history
-- `farmer`: own profile, trip requests, payments, and trip reviews
-
-## Notes
-
-- Do not commit `Frontend/.env`; it may contain database passwords and app secrets.
-- The frontend should be opened through Flask at `http://127.0.0.1:5001`, not directly from `frontend.html`, so API calls can reach the backend.
-- The SQL submission artifacts are included in the `database/` directory: `schema.sql` (tables + views), `seed.sql` (sample data), and `triggers.sql` (business-rule triggers). Load them into MySQL in this order: 1) `schema.sql`, 2) `seed.sql`, 3) `triggers.sql`. Seed before triggers, because the trip triggers reject pickup dates earlier than three days from today and would otherwise reject the historical sample data.
+If the database has no users yet, `app.py` can create a default admin using the
+`MOVERS_DEMO_USERNAME` / `MOVERS_DEMO_PASSWORD` values from the `.env`.
