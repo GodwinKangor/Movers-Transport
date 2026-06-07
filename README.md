@@ -164,4 +164,4 @@ If the database has no users yet, `app.py` can create a default demo system admi
 
 - Do not commit `Frontend/.env`; it may contain database passwords and app secrets.
 - The frontend should be opened through Flask at `http://127.0.0.1:5001`, not directly from `frontend.html`, so API calls can reach the backend.
-- No SQL schema or seed script is currently included in the repository, so the MySQL database must be prepared separately before the full API-backed app can run.
+- The SQL submission artifacts are included in the `database/` directory: `schema.sql` (tables + views), `seed.sql` (sample data), and `triggers.sql` (business-rule triggers). Load them into MySQL in this order: 1) `schema.sql`, 2) `seed.sql`, 3) `triggers.sql`. Seed before triggers, because the trip triggers reject pickup dates earlier than three days from today and would otherwise reject the historical sample data.

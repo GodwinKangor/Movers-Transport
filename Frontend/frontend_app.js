@@ -126,6 +126,96 @@ const tripDateRange = (trip) => trip.deliveryDate && trip.deliveryDate !== trip.
 
 const el = (id) => document.getElementById(id);
 
+let loadingCount = 0;
+
+const setLoading = (active, message = "Loading...") => {
+    loadingCount = Math.max(0, loadingCount + (active ? 1 : -1));
+    const overlay = el("loadingOverlay");
+    if (!overlay) return;
+    el("loadingText").textContent = message;
+    overlay.classList.toggle("auth-hidden", loadingCount === 0);
+    overlay.setAttribute("aria-hidden", loadingCount === 0 ? "true" : "false");
+};
+
+const showToast = (title, detail = "", tone = "success") => {
+    const container = el("toastContainer");
+    if (!container) return;
+    const toast = document.createElement("div");
+    toast.className = `toast ${tone}`.trim();
+    toast.innerHTML = `<strong>${escapeHtml(title)}</strong>${detail ? `<p>${escapeHtml(detail)}</p>` : ""}`;
+    container.appendChild(toast);
+    window.setTimeout(() => toast.remove(), 4200);
+};
+
+const escapeHtml = (value) => String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+
+const showConfirm = ({ title, message, confirmLabel = "Confirm", danger = false }) => new Promise((resolve) => {
+    const dialog = el("confirmDialog");
+    el("confirmTitle").textContent = title;
+    el("confirmMessage").textContent = message;
+    const acceptButton = el("confirmAccept");
+    acceptButton.textContent = confirmLabel;
+    acceptButton.classList.toggle("danger-button", danger);
+    dialog.returnValue = "cancel";
+    dialog.showModal();
+    const onClose = () => {
+        dialog.removeEventListener("close", onClose);
+        resolve(dialog.returnValue === "confirm");
+    };
+    dialog.addEventListener("close", onClose);
+});
+
+const renderEmptyState = (title, detail, icon = "—") => `
+    <div class="empty-state">
+        <span class="empty-state-icon">${icon}</span>
+        <strong>${escapeHtml(title)}</strong>
+        <p>${escapeHtml(detail)}</p>
+    </div>
+`;
+
+const statusBadgeClass = (status) => {
+    const normalized = String(status || "").toLowerCase();
+    if (["scheduled", "in_progress", "completed", "cancelled", "paid", "unpaid", "partial"].includes(normalized)) {
+        return normalized;
+    }
+    return "";
+};
+
+const renderBadge = (label, extraClass = "") => {
+    const tone = extraClass || statusBadgeClass(label);
+    return `<span class="badge ${tone}">${escapeHtml(statusText(label))}</span>`;
+};
+
+const updateConnectionStatus = () => {
+    const dot = el("connectionDot");
+    const label = el("connectionLabel");
+    if (!dot || !label) return;
+    if (!authToken) {
+        dot.className = "status-dot offline";
+        label.textContent = "Not signed in";
+        return;
+    }
+    if (loadingCount > 0) {
+        dot.className = "status-dot pending";
+        label.textContent = "Syncing data...";
+        return;
+    }
+    dot.className = apiAvailable ? "status-dot" : "status-dot offline";
+    label.textContent = apiAvailable ? "Connected to MySQL" : "Using local demo data";
+};
+
+const viewSubtitles = {
+    dashboard: "Operations overview, trip manifest, and business rule checks",
+    trips: "Create trip requests, review workload, and update trip status",
+    fleet: "Vehicle capacity, maintenance costs, and payroll summaries",
+    farmers: "Farmer profiles, groups, payments, and trip reviews",
+    discipline: "Driver discipline records, offences, warnings, and suspensions",
+    users: "Staff account management and role assignment"
+};
+
 const replaceState = (nextState) => {
     state = nextState;
     renderAll();
@@ -156,6 +246,17 @@ const apiRequest = async (path, options = {}) => {
     return payload;
 };
 
+const withLoading = async (message, task) => {
+    setLoading(true, message);
+    updateConnectionStatus();
+    try {
+        return await task();
+    } finally {
+        setLoading(false);
+        updateConnectionStatus();
+    }
+};
+
 const showLogin = (message = "") => {
     el("authScreen").classList.remove("auth-hidden");
     el("appShell").classList.add("auth-hidden");
@@ -165,8 +266,9 @@ const showLogin = (message = "") => {
 const showApp = () => {
     el("authScreen").classList.add("auth-hidden");
     el("appShell").classList.remove("auth-hidden");
-    el("sidebarRole").textContent = `${statusText(currentUser.role)}: ${currentUser.username}`;
+    el("sidebarRole").textContent = `${statusText(currentUser.role)} · ${currentUser.username}`;
     applyRoleAccess();
+    updateConnectionStatus();
 };
 
 const saveSession = (token, user) => {
@@ -186,19 +288,20 @@ const handleLogin = async (event) => {
     event.preventDefault();
     setMessage(el("loginMessage"), "Signing in...", "");
     try {
-        const payload = await apiRequest("/api/login", {
+        const payload = await withLoading("Signing in...", () => apiRequest("/api/login", {
             method: "POST",
             body: JSON.stringify({
                 username: el("usernameInput").value.trim(),
                 password: el("passwordInput").value,
                 role: el("roleInput").value
             })
-        });
+        }));
         saveSession(payload.token, payload.user);
         event.target.reset();
         setMessage(el("loginMessage"), "", "");
         showApp();
         await loadFromApi();
+        showToast("Signed in", `Welcome back, ${payload.user.username}.`);
     } catch (error) {
         clearSession();
         showLogin(error.message);
@@ -209,7 +312,7 @@ const handleFarmerSignup = async (event) => {
     event.preventDefault();
     setMessage(el("signupMessage"), "Creating farmer account...", "");
     try {
-        const payload = await apiRequest("/api/signup/farmer", {
+        const payload = await withLoading("Creating account...", () => apiRequest("/api/signup/farmer", {
             method: "POST",
             body: JSON.stringify({
                 firstName: el("signupFirstName").value.trim(),
@@ -220,12 +323,13 @@ const handleFarmerSignup = async (event) => {
                 username: el("signupUsername").value.trim(),
                 password: el("signupPassword").value
             })
-        });
+        }));
         saveSession(payload.token, payload.user);
         event.target.reset();
         setMessage(el("signupMessage"), "", "");
         showApp();
         await loadFromApi();
+        showToast("Account created", "Your farmer profile is ready.");
     } catch (error) {
         setMessage(el("signupMessage"), error.message, "error");
     }
@@ -234,10 +338,11 @@ const handleFarmerSignup = async (event) => {
 const restoreSession = async () => {
     if (!authToken) {
         showLogin();
+        updateConnectionStatus();
         return;
     }
     try {
-        const payload = await apiRequest("/api/me");
+        const payload = await withLoading("Restoring session...", () => apiRequest("/api/me"));
         currentUser = payload.user;
         showApp();
         await loadFromApi();
@@ -250,17 +355,21 @@ const restoreSession = async () => {
 const loadFromApi = async () => {
     if (!authToken) {
         showLogin();
+        updateConnectionStatus();
         return;
     }
     try {
-        const payload = await apiRequest("/api/bootstrap");
+        const payload = await withLoading("Loading application data...", () => apiRequest("/api/bootstrap"));
         apiAvailable = true;
         replaceState(payload);
         setMessage(el("tripFormMessage"), "Connected to MySQL database.", "success");
+        updateConnectionStatus();
     } catch (error) {
         apiAvailable = false;
+        updateConnectionStatus();
         if (authToken) {
             setMessage(el("tripFormMessage"), error.message, "error");
+            showToast("Could not load data", error.message, "error");
         } else {
             showLogin(error.message);
         }
@@ -268,9 +377,17 @@ const loadFromApi = async () => {
 };
 
 const tripCost = (trip) => {
+    if (trip && trip.totalCost != null && trip.transportCost != null && trip.taxAmount != null) {
+        return {
+            transport: roundMoney(trip.transportCost),
+            tax: roundMoney(trip.taxAmount),
+            total: roundMoney(trip.totalCost),
+            source: "database",
+        };
+    }
     const transport = roundMoney((trip.baseRate ?? state.config.baseRate) * trip.distanceKm * trip.loadWeight);
     const tax = roundMoney(transport * 0.2);
-    return { transport, tax, total: roundMoney(transport + tax) };
+    return { transport, tax, total: roundMoney(transport + tax), source: "estimate" };
 };
 
 const roundMoney = (value) => Math.round((Number(value) || 0) * 100) / 100;
@@ -351,6 +468,12 @@ const setMessage = (node, text, tone = "") => {
     node.textContent = text;
 };
 
+const setRoleNotice = (node, text = "") => {
+    if (!node) return;
+    node.textContent = text;
+    node.classList.toggle("visible", Boolean(text));
+};
+
 const escapeAttr = (value) => String(value ?? "")
     .replaceAll("&", "&amp;")
     .replaceAll("\"", "&quot;")
@@ -361,6 +484,9 @@ const renderMetrics = () => {
     el("driverPortal").classList.toggle("auth-hidden", currentUser?.role !== "driver");
     el("hrDashboard").classList.toggle("auth-hidden", currentUser?.role !== "hr_manager");
     el("defaultDashboard").classList.toggle("auth-hidden", ["driver", "hr_manager"].includes(currentUser?.role));
+    if (el("demoBanner")) {
+        el("demoBanner").classList.toggle("auth-hidden", ["driver", "hr_manager", "farmer"].includes(currentUser?.role));
+    }
     if (currentUser?.role === "driver") renderDriverPortal();
     if (currentUser?.role === "hr_manager") renderHrDashboard();
 
@@ -452,9 +578,9 @@ const renderHrDashboard = () => {
         });
 
     el("hrOffenceSummary").textContent = `${offenceItems.length} offences`;
-    el("hrOffenceList").innerHTML = offenceItems.join("") || `<p class="muted-label">No offences recorded.</p>`;
+    el("hrOffenceList").innerHTML = offenceItems.join("") || renderEmptyState("No offences recorded", "Driver offences will appear here when HR or ops records them.", "!");
     el("hrReviewSummary").textContent = `${reviewItems.length} reviews`;
-    el("hrReviewList").innerHTML = reviewItems.join("") || `<p class="muted-label">No trip reviews submitted.</p>`;
+    el("hrReviewList").innerHTML = reviewItems.join("") || renderEmptyState("No trip reviews yet", "Farmer reviews for completed trips will show up here.", "★");
     renderHrDriverDetail();
 };
 
@@ -495,7 +621,7 @@ const renderHrDriverDetail = () => {
                         </label>
                         <button class="primary-button" type="submit">Save</button>
                     </form>
-                `).join("") : `<p class="muted-label">No offences recorded for this driver.</p>`}
+                `).join("") : renderEmptyState("No offences for this driver", "Offence records will appear here after they are logged.", "!")}
             </div>
         </div>
         <div class="detail-section">
@@ -512,7 +638,7 @@ const renderHrDriverDetail = () => {
                             <div><strong>Suspension</strong><p>${suspension.startDate} to ${suspension.endDate} - ${suspension.reason}</p></div>
                         </article>
                     `)
-                ].join("") || `<p class="muted-label">No warnings or suspensions recorded.</p>`}
+                ].join("") || renderEmptyState("Clean record", "No warnings or suspensions on file for this driver.", "+")}
             </div>
         </div>
     `;
@@ -530,7 +656,7 @@ const renderDriverPortal = () => {
     }
 
     if (!driver) {
-        el("driverProfileCard").innerHTML = `<p class="muted-label">No driver profile is linked to this account.</p>`;
+        el("driverProfileCard").innerHTML = renderEmptyState("No driver profile linked", "This account is not connected to a driver record.", "?");
         return;
     }
 
@@ -556,7 +682,7 @@ const renderDriverPortal = () => {
             </div>
             <span class="badge ${vehicle.status === "available" ? "" : "warn"}">${statusText(vehicle.status)}</span>
         </article>
-    ` : `<p class="muted-label">No vehicle is currently assigned.</p>`;
+    ` : renderEmptyState("No vehicle assigned", "Your assigned vehicle will appear here when one is linked to your driver profile.", "V");
 
     el("driverTripSummary").textContent = `${trips.length} assigned`;
     el("driverTripList").innerHTML = trips.length ? trips.map((trip) => `
@@ -566,9 +692,9 @@ const renderDriverPortal = () => {
                     <p>${getCustomerName(trip)} - ${tripDateRange(trip)}</p>
                     <p>${trip.cargoType}, ${trip.loadWeight.toLocaleString()} kg</p>
                 </div>
-            <span class="badge">${statusText(trip.status)}</span>
+            <span class="badge ${statusBadgeClass(trip.status)}">${statusText(trip.status)}</span>
         </button>
-    `).join("") : `<p class="muted-label">No assigned trips yet.</p>`;
+    `).join("") : renderEmptyState("No assigned trips", "Trips assigned to you will appear here once scheduled.", "→");
     renderDriverTripDetail();
 
     el("driverDisciplineSummary").textContent = `${offences.length} offences, ${warnings.length} warnings, ${suspensions.length} suspensions`;
@@ -598,7 +724,7 @@ const renderDriverPortal = () => {
                 </div>
             </article>
         `)
-    ].join("") || `<p class="muted-label">No discipline records.</p>`;
+    ].join("") || renderEmptyState("No discipline records", "Offences, warnings, and suspensions will appear here.", "!");
 
     renderOptions(el("serviceVehicleSelect"), state.vehicles, (item) => `${item.plate} - ${statusText(item.status)}`);
     el("serviceTripSelect").innerHTML = `<option value="">No related trip</option>` + trips.map((trip) => (
@@ -648,7 +774,7 @@ const renderDriverTripDetail = () => {
                             <span class="badge warn">${money.format(record.cost)}</span>
                         </article>
                     `)
-                ].join("") || `<p class="muted-label">No vehicle records linked yet.</p>`}
+                ].join("") || renderEmptyState("No vehicle records", "Fuel and maintenance entries linked to this trip will show here.", "R")}
             </div>
         </div>
     `;
@@ -657,6 +783,17 @@ const renderDriverTripDetail = () => {
 const renderTripTable = () => {
     const filter = el("tripStatusFilter").value;
     const trips = state.trips.filter((trip) => filter === "all" || trip.status === filter);
+    if (!trips.length) {
+        const detail = filter === "all"
+            ? "Create a trip from the Trips tab to populate the manifest."
+            : `No trips with status "${statusText(filter)}" right now. Try another filter.`;
+        el("tripTable").innerHTML = `
+            <tr class="table-empty">
+                <td colspan="6">${renderEmptyState("No trips to show", detail, "→")}</td>
+            </tr>
+        `;
+        return;
+    }
     el("tripTable").innerHTML = trips.map((trip) => {
         const costs = tripCost(trip);
         return `
@@ -665,7 +802,7 @@ const renderTripTable = () => {
                 <td>${getCustomerName(trip)}</td>
                 <td>${getDriverName(trip.driverId)}</td>
                 <td>${trip.origin}<br><span class="muted-label">${trip.destination}</span></td>
-                <td><span class="badge">${statusText(trip.status)}</span></td>
+                <td>${renderBadge(trip.status)}</td>
                 <td>${money.format(costs.total)}</td>
             </tr>
         `;
@@ -760,7 +897,7 @@ const renderTripFormOptions = () => {
 const renderWorkload = () => {
     const scheduled = state.trips.filter((trip) => trip.status === "scheduled");
     el("workloadCount").textContent = `${scheduled.length} scheduled`;
-    el("workloadList").innerHTML = scheduled.map((trip) => {
+    el("workloadList").innerHTML = scheduled.length ? scheduled.map((trip) => {
         const vehicle = getVehicle(trip.vehicleId);
         return `
             <button class="list-item list-button ${selectedTripId === trip.id ? "selected" : ""}" data-trip-id="${trip.id}" type="button">
@@ -772,7 +909,7 @@ const renderWorkload = () => {
                 <span class="badge">${tripDateRange(trip)}</span>
             </button>
         `;
-    }).join("");
+    }).join("") : renderEmptyState("No scheduled trips", "Upcoming workload appears here when trips are scheduled.", "T");
 };
 
 const tripDetailMarkup = (trip) => {
@@ -819,10 +956,28 @@ const tripDetailMarkup = (trip) => {
             </form>
         `
         : "";
+    const loaderManagement = canUpdateTripStatus()
+        ? `
+            <div class="detail-section">
+                <h4>Loaders</h4>
+                <p class="field-hint">Each trip must keep at least one loader.</p>
+                <div class="stack-list">
+                    ${trip.loaders.length ? trip.loaders.map((loaderId) => `
+                        <article class="list-item">
+                            <div><strong>${getLoaderName(loaderId)}</strong></div>
+                            ${trip.loaders.length > 1
+                                ? `<button class="ghost-button remove-loader-button" data-remove-loader-trip-id="${trip.id}" data-remove-loader-id="${loaderId}" type="button">Remove</button>`
+                                : `<span class="badge">last loader</span>`}
+                        </article>
+                    `).join("") : renderEmptyState("No loaders assigned", "Loaders are assigned when the trip is created.", "L")}
+                </div>
+            </div>
+        `
+        : "";
     return `
         <div class="profile-grid compact">
             <div class="profile-field"><span>Customer</span><strong>${getCustomerName(trip)}</strong></div>
-            <div class="profile-field"><span>Status</span><strong>${statusText(trip.status)}</strong></div>
+            <div class="profile-field"><span>Status</span>${renderBadge(trip.status)}</div>
             <div class="profile-field"><span>Route</span><strong>${trip.origin} to ${trip.destination}</strong></div>
             <div class="profile-field"><span>Pickup</span><strong>${trip.tripDate}</strong></div>
             <div class="profile-field"><span>Delivery</span><strong>${trip.deliveryDate || trip.tripDate}</strong></div>
@@ -831,7 +986,7 @@ const tripDetailMarkup = (trip) => {
             <div class="profile-field"><span>Driver</span><strong>${getDriverName(trip.driverId)}</strong></div>
             <div class="profile-field"><span>Vehicle</span><strong>${vehicle ? vehicle.plate : "Unassigned"}</strong></div>
             <div class="profile-field"><span>Loaders</span><strong>${tripLoadersText(trip)}</strong></div>
-            <div class="profile-field"><span>Payment</span><strong>${statusText(paymentStatus(trip))}</strong></div>
+            <div class="profile-field"><span>Payment</span>${renderBadge(paymentStatus(trip))}</div>
             <div class="profile-field"><span>Paid</span><strong>${money.format(paid)}</strong></div>
             <div class="profile-field"><span>Balance</span><strong>${money.format(balance)}</strong></div>
         </div>
@@ -840,6 +995,7 @@ const tripDetailMarkup = (trip) => {
             <div><span>Tax</span><strong>${money.format(costs.tax)}</strong></div>
             <div><span>Total</span><strong>${money.format(costs.total)}</strong></div>
         </div>
+        <p class="field-hint">${costs.source === "database" ? "Calculated and stored by the database (source of truth)." : "Estimate \u2014 the database recalculates this on submit."}</p>
         <div class="detail-section">
             <h4>Payments</h4>
             <div class="stack-list">
@@ -847,9 +1003,10 @@ const tripDetailMarkup = (trip) => {
                     <article class="list-item">
                         <div><strong>${money.format(payment.amount)}</strong><p>${statusText(payment.method)}${payment.paymentDate ? ` on ${payment.paymentDate}` : ""}</p></div>
                     </article>
-                `).join("") : `<p class="muted-label">No customer payments recorded.</p>`}
+                `).join("") : renderEmptyState("No payments recorded", "Record a payment using the form below.", "$")}
             </div>
         </div>
+        ${loaderManagement}
         ${statusActions}
         ${paymentForm}
     `;
@@ -868,7 +1025,7 @@ const renderSelectedTripDetail = () => {
 const renderFleet = () => {
     const minCapacity = Number(el("capacityFilter").value) || 0;
     const vehicles = state.vehicles.filter((vehicle) => vehicle.capacity >= minCapacity);
-    el("vehicleGrid").innerHTML = vehicles.map((vehicle) => {
+    el("vehicleGrid").innerHTML = vehicles.length ? vehicles.map((vehicle) => {
         const driver = vehicle.assignedDriverId ? getDriverName(vehicle.assignedDriverId) : "No assigned driver";
         const badgeTone = vehicle.status === "available" ? "" : "warn";
         const fuelRecords = state.fuelRecords.filter((record) => record.vehicleId === vehicle.id);
@@ -909,7 +1066,7 @@ const renderFleet = () => {
                 </div>
             </article>
         `;
-    }).join("");
+    }).join("") : renderEmptyState("No vehicles match this filter", "Lower the minimum load filter to see more vehicles.", "F");
     renderPayroll();
 };
 
@@ -972,7 +1129,7 @@ const renderFarmers = () => {
         return;
     }
 
-    el("farmerList").innerHTML = state.farmers.map((farmer) => `
+    el("farmerList").innerHTML = state.farmers.length ? state.farmers.map((farmer) => `
         <article class="list-item">
             <div>
                 <strong>${farmer.name}</strong>
@@ -980,9 +1137,9 @@ const renderFarmers = () => {
             </div>
             <span class="badge">${statusText(farmer.type)}</span>
         </article>
-    `).join("");
+    `).join("") : renderEmptyState("No farmers found", "Farmer customer records will appear here.", "F");
 
-    el("groupList").innerHTML = state.groups.map((group) => {
+    el("groupList").innerHTML = state.groups.length ? state.groups.map((group) => {
         const eligible = group.members.length >= 5;
         return `
             <article class="list-item">
@@ -993,13 +1150,13 @@ const renderFarmers = () => {
                 <span class="badge ${eligible ? "" : "warn"}">${eligible ? "eligible" : "needs members"}</span>
             </article>
         `;
-    }).join("");
+    }).join("") : renderEmptyState("No farmer groups", "Small-scale farmers can create or join groups from the farmer portal.", "G");
 };
 
 const renderFarmerPortal = () => {
     const farmer = byId(state.farmers, currentUser?.farmerId);
     if (!farmer) {
-        el("farmerProfileCard").innerHTML = `<p class="muted-label">No farmer profile is linked to this account.</p>`;
+        el("farmerProfileCard").innerHTML = renderEmptyState("No farmer profile linked", "This account is not connected to a farmer record.", "?");
         el("farmerPaymentSummary").textContent = "";
         el("farmerPaymentList").innerHTML = "";
         el("farmerTripList").innerHTML = "";
@@ -1048,7 +1205,7 @@ const renderFarmerPortal = () => {
                 </div>
             </article>
         `;
-    }).join("") : `<p class="muted-label">No trip payments yet.</p>`;
+    }).join("") : renderEmptyState("No trip payments yet", "Payment history appears here after trips are billed and paid.", "$");
 
     el("farmerTripList").innerHTML = trips.length ? trips.map((trip) => {
         const costs = tripCost(trip);
@@ -1059,10 +1216,10 @@ const renderFarmerPortal = () => {
                     <p>${tripDateRange(trip)} - ${trip.cargoType}, ${trip.loadWeight.toLocaleString()} kg</p>
                     <p>${getDriverName(trip.driverId)} - ${money.format(costs.total)}</p>
                 </div>
-                <span class="badge">${statusText(trip.status)}</span>
+                <span class="badge ${statusBadgeClass(trip.status)}">${statusText(trip.status)}</span>
             </button>
         `;
-    }).join("") : `<p class="muted-label">No trip requests yet.</p>`;
+    }).join("") : renderEmptyState("No trip requests yet", "Use Request trip to schedule your first transport.", "→");
 
     renderReviewFormOptions(trips);
     renderFarmerReviews(farmer.id);
@@ -1113,7 +1270,11 @@ const renderSmallScaleOnboarding = (farmer, memberGroups) => {
 };
 
 const renderReviewFormOptions = (trips) => {
-    const reviewableTrips = trips.filter(isPastTrip);
+    // Reviews are only supported for individual-farmer trips. Group trips
+    // (customer_group_id set, no customer_farmer_id) cannot be reviewed yet,
+    // so they are excluded here and the farmer is told why.
+    const reviewableTrips = trips.filter((trip) => isPastTrip(trip) && trip.farmerId != null);
+    const blockedGroupTrips = trips.some((trip) => isPastTrip(trip) && trip.farmerId == null && trip.groupId != null);
     renderOptions(el("reviewTripSelect"), reviewableTrips, (trip) => `#${trip.id} ${trip.cargoType} - ${tripDateRange(trip)}`);
     const selectedTrip = byId(reviewableTrips, el("reviewTripSelect").value) || reviewableTrips[0];
     const targetType = el("reviewTargetType").value;
@@ -1125,7 +1286,12 @@ const renderReviewFormOptions = (trips) => {
         field.disabled = reviewableTrips.length === 0 || (field.id === "reviewLoaderSelect" && targetType !== "loader");
     });
     if (reviewableTrips.length === 0) {
-        setMessage(el("reviewMessage"), "No past trips are available for review yet.", "error");
+        const message = blockedGroupTrips
+            ? "Reviews are currently available for individual farmer trips only."
+            : "No past trips are available for review yet.";
+        setMessage(el("reviewMessage"), message, "");
+    } else {
+        setMessage(el("reviewMessage"), "", "");
     }
 };
 
@@ -1145,7 +1311,7 @@ const renderFarmerReviews = (farmerId) => {
                 <span class="badge">${review.rating}/5</span>
             </article>
         `;
-    }).join("") : `<p class="muted-label">No reviews submitted yet.</p>`;
+    }).join("") : renderEmptyState("No reviews submitted yet", "Review a completed trip using the form above.", "★");
 };
 
 const getDiscipline = (driverId) => {
@@ -1156,7 +1322,7 @@ const getDiscipline = (driverId) => {
 };
 
 const renderDiscipline = () => {
-    el("disciplineList").innerHTML = state.drivers.map((driver) => {
+    el("disciplineList").innerHTML = state.drivers.length ? state.drivers.map((driver) => {
         const summary = getDiscipline(driver.id);
         const tone = driver.status === "active" ? "" : "danger";
         return `
@@ -1168,7 +1334,7 @@ const renderDiscipline = () => {
                 <span class="badge ${tone}">${statusText(driver.status)}</span>
             </article>
         `;
-    }).join("");
+    }).join("") : renderEmptyState("No drivers found", "Driver records will appear here when available.", "D");
 };
 
 const renderUsers = () => {
@@ -1207,7 +1373,7 @@ const renderUsers = () => {
                 ` : `<span class="badge">${statusText(user.role)}</span>`}
             </article>
         `;
-    }).join("") || `<p class="muted-label">No user accounts found.</p>`;
+    }).join("") || renderEmptyState("No user accounts found", "Create staff users using the form on the right.", "U");
 };
 
 const updateCostPreview = () => {
@@ -1305,7 +1471,7 @@ const handleTripSubmit = async (event) => {
 
     if (apiAvailable) {
         try {
-            const payload = await apiRequest("/api/trips", {
+            const payload = await withLoading("Scheduling trip...", () => apiRequest("/api/trips", {
                 method: "POST",
                 body: JSON.stringify({
                     vehicleId: trip.vehicleId,
@@ -1323,9 +1489,10 @@ const handleTripSubmit = async (event) => {
                     baseRate: trip.baseRate,
                     loaders: trip.loaders
                 })
-            });
+            }));
             replaceState(payload.state);
             setMessage(el("tripFormMessage"), `Trip #${payload.tripId} saved to MySQL.`, "success");
+            showToast("Trip scheduled", `Trip #${payload.tripId} was created successfully.`);
             event.target.reset();
             setDefaultTripDates();
             updateCostPreview();
@@ -1337,6 +1504,7 @@ const handleTripSubmit = async (event) => {
 
     state.trips.push(trip);
     setMessage(el("tripFormMessage"), `Trip #${trip.id} scheduled in demo data.`, "success");
+    showToast("Trip scheduled", `Trip #${trip.id} was created in demo data.`);
     event.target.reset();
     setDefaultTripDates();
     renderAll();
@@ -1359,12 +1527,13 @@ const handleOffenceSubmit = async (event) => {
 
     if (apiAvailable) {
         try {
-            const payload = await apiRequest("/api/offences", {
+            const payload = await withLoading("Saving offence...", () => apiRequest("/api/offences", {
                 method: "POST",
                 body: JSON.stringify(offence)
-            });
+            }));
             replaceState(payload.state);
             setMessage(el("offenceMessage"), `Offence #${payload.offenceId} saved to MySQL.`, "success");
+            showToast("Offence recorded", `Offence #${payload.offenceId} was saved.`);
             event.target.reset();
         } catch (error) {
             setMessage(el("offenceMessage"), error.message, "error");
@@ -1392,15 +1561,26 @@ const handleTripStatusUpdate = async (button) => {
     const status = button.dataset.tripStatus;
     if (!canUpdateTripStatus()) return;
 
+    if (status === "cancelled") {
+        const confirmed = await showConfirm({
+            title: "Cancel this trip?",
+            message: "This marks the trip as cancelled. Cancelled trips cannot accept payments and this status is final.",
+            confirmLabel: "Cancel trip",
+            danger: true
+        });
+        if (!confirmed) return;
+    }
+
     if (apiAvailable) {
         try {
-            const payload = await apiRequest(`/api/trips/${tripId}/status`, {
+            const payload = await withLoading("Updating trip status...", () => apiRequest(`/api/trips/${tripId}/status`, {
                 method: "PATCH",
                 body: JSON.stringify({ status })
-            });
+            }));
             replaceState(payload.state);
+            showToast("Trip updated", `Trip #${tripId} is now ${statusText(status)}.`);
         } catch (error) {
-            window.alert(error.message);
+            showToast("Could not update trip", error.message, "error");
         }
         return;
     }
@@ -1411,6 +1591,43 @@ const handleTripStatusUpdate = async (button) => {
     const vehicle = getVehicle(trip.vehicleId);
     if (vehicle && status === "in_progress") vehicle.status = "in_transit";
     if (vehicle && ["completed", "cancelled"].includes(status)) vehicle.status = "available";
+    showToast("Trip updated", `Trip #${tripId} is now ${statusText(status)}.`);
+    renderAll();
+};
+
+const handleRemoveLoader = async (button) => {
+    const tripId = Number(button.dataset.removeLoaderTripId);
+    const loaderId = Number(button.dataset.removeLoaderId);
+    const trip = byId(state.trips, tripId);
+    if (!trip || !canUpdateTripStatus()) return;
+    if (trip.loaders.length <= 1) {
+        showToast("Cannot remove loader", "A trip must keep at least one loader.", "error");
+        return;
+    }
+
+    const confirmed = await showConfirm({
+        title: "Remove this loader?",
+        message: `Remove ${getLoaderName(loaderId)} from trip #${tripId}? A trip must keep at least one loader.`,
+        confirmLabel: "Remove loader",
+        danger: true
+    });
+    if (!confirmed) return;
+
+    if (apiAvailable) {
+        try {
+            const payload = await withLoading("Removing loader...", () => apiRequest(`/api/trips/${tripId}/loaders/${loaderId}`, {
+                method: "DELETE"
+            }));
+            replaceState(payload.state);
+            showToast("Loader removed", `${getLoaderName(loaderId)} was removed from trip #${tripId}.`);
+        } catch (error) {
+            showToast("Could not remove loader", error.message, "error");
+        }
+        return;
+    }
+
+    trip.loaders = trip.loaders.filter((id) => id !== loaderId);
+    showToast("Loader removed", `${getLoaderName(loaderId)} was removed from trip #${tripId}.`);
     renderAll();
 };
 
@@ -1435,11 +1652,12 @@ const handlePaymentSubmit = async (form) => {
 
     if (apiAvailable) {
         try {
-            const payload = await apiRequest("/api/payments", {
+            const payload = await withLoading("Recording payment...", () => apiRequest("/api/payments", {
                 method: "POST",
                 body: JSON.stringify({ tripId, amount, method })
-            });
+            }));
             replaceState(payload.state);
+            showToast("Payment recorded", `${money.format(amount)} applied to trip #${tripId}.`);
         } catch (error) {
             setMessage(el("paymentMessage"), error.message, "error");
         }
@@ -1452,6 +1670,7 @@ const handlePaymentSubmit = async (form) => {
         method,
         paymentDate: today
     });
+    showToast("Payment recorded", `${money.format(amount)} applied to trip #${tripId}.`);
     renderAll();
 };
 
@@ -1463,13 +1682,14 @@ const handleOffenceUpdate = async (form) => {
 
     if (apiAvailable) {
         try {
-            const payload = await apiRequest(`/api/offences/${offenceId}`, {
+            const payload = await withLoading("Updating offence...", () => apiRequest(`/api/offences/${offenceId}`, {
                 method: "PATCH",
                 body: JSON.stringify({ type, surcharge })
-            });
+            }));
             replaceState(payload.state);
+            showToast("Offence updated", "Changes were saved.");
         } catch (error) {
-            window.alert(error.message);
+            showToast("Could not update offence", error.message, "error");
         }
         return;
     }
@@ -1478,6 +1698,7 @@ const handleOffenceUpdate = async (form) => {
     if (offence) {
         offence.type = type;
         offence.surcharge = surcharge;
+        showToast("Offence updated", "Changes were saved in demo data.");
         renderAll();
     }
 };
@@ -1494,12 +1715,13 @@ const handleServiceRecordSubmit = async (event) => {
 
     if (apiAvailable) {
         try {
-            const payload = await apiRequest("/api/service-records", {
+            const payload = await withLoading("Saving maintenance record...", () => apiRequest("/api/service-records", {
                 method: "POST",
                 body: JSON.stringify(serviceRecord)
-            });
+            }));
             replaceState(payload.state);
             setMessage(el("serviceMessage"), `Maintenance #${payload.serviceId} saved.`, "success");
+            showToast("Maintenance saved", `Record #${payload.serviceId} was created.`);
             event.target.reset();
             el("serviceCostInput").value = 0;
         } catch (error) {
@@ -1515,6 +1737,7 @@ const handleServiceRecordSubmit = async (event) => {
         cost: serviceRecord.serviceCost
     });
     setMessage(el("serviceMessage"), "Maintenance saved in demo data.", "success");
+    showToast("Maintenance saved", "Record added in demo data.");
     event.target.reset();
     renderAll();
 };
@@ -1533,12 +1756,13 @@ const handleTripReviewSubmit = async (event) => {
 
     if (apiAvailable) {
         try {
-            const payload = await apiRequest("/api/reviews", {
+            const payload = await withLoading("Submitting review...", () => apiRequest("/api/reviews", {
                 method: "POST",
                 body: JSON.stringify(review)
-            });
+            }));
             replaceState(payload.state);
             setMessage(el("reviewMessage"), `Review #${payload.reviewId} saved.`, "success");
+            showToast("Review submitted", "Thank you for your feedback.");
             event.target.reset();
             renderAll();
         } catch (error) {
@@ -1555,6 +1779,7 @@ const handleTripReviewSubmit = async (event) => {
         ...review
     });
     setMessage(el("reviewMessage"), "Review saved in demo data.", "success");
+    showToast("Review submitted", "Saved in demo data.");
     event.target.reset();
     renderAll();
 };
@@ -1577,12 +1802,13 @@ const handleGroupCreateSubmit = async (event) => {
 
     if (apiAvailable) {
         try {
-            const payload = await apiRequest("/api/groups", {
+            const payload = await withLoading("Creating group...", () => apiRequest("/api/groups", {
                 method: "POST",
                 body: JSON.stringify(group)
-            });
+            }));
             replaceState(payload.state);
             setMessage(el("groupMessage"), `Group #${payload.groupId} created.`, "success");
+            showToast("Group created", "You are now the group chair.");
             event.target.reset();
         } catch (error) {
             setMessage(el("groupMessage"), error.message, "error");
@@ -1599,6 +1825,7 @@ const handleGroupCreateSubmit = async (event) => {
         memberRoles: { [String(farmer.id)]: "chair" }
     });
     setMessage(el("groupMessage"), "Group created in demo data.", "success");
+    showToast("Group created", "You are now the group chair.");
     event.target.reset();
     renderAll();
 };
@@ -1611,12 +1838,13 @@ const handleGroupJoin = async (button) => {
 
     if (apiAvailable) {
         try {
-            const payload = await apiRequest(`/api/groups/${groupId}/join`, {
+            const payload = await withLoading("Joining group...", () => apiRequest(`/api/groups/${groupId}/join`, {
                 method: "POST",
                 body: JSON.stringify({})
-            });
+            }));
             replaceState(payload.state);
             setMessage(el("groupMessage"), `Joined ${group.name}.`, "success");
+            showToast("Joined group", `You are now a member of ${group.name}.`);
         } catch (error) {
             setMessage(el("groupMessage"), error.message, "error");
         }
@@ -1630,6 +1858,7 @@ const handleGroupJoin = async (button) => {
     group.members.push(farmer.id);
     group.memberRoles = { ...(group.memberRoles || {}), [String(farmer.id)]: "member" };
     setMessage(el("groupMessage"), `Joined ${group.name} in demo data.`, "success");
+    showToast("Joined group", `You are now a member of ${group.name}.`);
     renderAll();
 };
 
@@ -1656,12 +1885,13 @@ const handleStaffUserSubmit = async (event) => {
 
     if (apiAvailable) {
         try {
-            const payload = await apiRequest("/api/users/staff", {
+            const payload = await withLoading("Creating user...", () => apiRequest("/api/users/staff", {
                 method: "POST",
                 body: JSON.stringify(staffUser)
-            });
+            }));
             replaceState(payload.state);
             setMessage(el("staffUserMessage"), `User #${payload.userId} created.`, "success");
+            showToast("Staff user created", `${staffUser.username} can now sign in.`);
             event.target.reset();
         } catch (error) {
             setMessage(el("staffUserMessage"), error.message, "error");
@@ -1691,14 +1921,29 @@ const handleUserRoleUpdate = async (select) => {
     const user = byId(state.users, userId);
     if (!user || currentUser?.role !== "system_admin") return;
 
+    if (role !== user.role) {
+        const confirmed = await showConfirm({
+            title: "Change user role?",
+            message: `Update ${user.username} from ${statusText(user.role)} to ${statusText(role)}?`,
+            confirmLabel: "Update role"
+        });
+        if (!confirmed) {
+            select.value = user.role;
+            return;
+        }
+    } else {
+        return;
+    }
+
     if (apiAvailable) {
         try {
-            const payload = await apiRequest(`/api/users/${userId}/role`, {
+            const payload = await withLoading("Updating role...", () => apiRequest(`/api/users/${userId}/role`, {
                 method: "PATCH",
                 body: JSON.stringify({ role })
-            });
+            }));
             replaceState(payload.state);
             setMessage(el("staffUserMessage"), `Updated ${user.username}.`, "success");
+            showToast("Role updated", `${user.username} is now ${statusText(role)}.`);
         } catch (error) {
             setMessage(el("staffUserMessage"), error.message, "error");
             select.value = user.role;
@@ -1708,6 +1953,7 @@ const handleUserRoleUpdate = async (select) => {
 
     user.role = role;
     setMessage(el("staffUserMessage"), `Updated ${user.username} in demo data.`, "success");
+    showToast("Role updated", `${user.username} is now ${statusText(role)}.`);
     renderAll();
 };
 
@@ -1719,7 +1965,12 @@ const switchView = (viewName) => {
     document.querySelectorAll(".view").forEach((view) => {
         const active = view.id === `${viewName}View`;
         view.classList.toggle("active", active);
-        if (active) el("viewTitle").textContent = view.dataset.title;
+        if (active) {
+            el("viewTitle").textContent = view.dataset.title;
+            if (el("viewSubtitle")) {
+                el("viewSubtitle").textContent = viewSubtitles[viewName] || "";
+            }
+        }
     });
 };
 
@@ -1741,14 +1992,21 @@ const applyRoleAccess = () => {
     });
     document.querySelectorAll("[data-open-trip]").forEach((button) => {
         button.disabled = !tripAllowed;
+        button.classList.toggle("auth-hidden", !tripAllowed);
     });
     if (!tripAllowed) {
         const message = currentUser?.role === "farmer"
-            ? "Small-scale farmers must chair an eligible group before requesting transport."
+            ? "Small-scale farmers must chair an eligible group (5+ members) before requesting transport."
             : "This role can view trips but cannot create new trip requests.";
-        setMessage(el("tripFormMessage"), message, "error");
+        setRoleNotice(el("tripRoleNotice"), message);
+    } else {
+        setRoleNotice(el("tripRoleNotice"), "");
     }
-    if (!offenceAllowed) setMessage(el("offenceMessage"), "This role can view discipline data but cannot record offences.", "error");
+    if (!offenceAllowed) {
+        setRoleNotice(el("offenceRoleNotice"), "This role can view discipline data but cannot record offences.");
+    } else {
+        setRoleNotice(el("offenceRoleNotice"), "");
+    }
 };
 
 const renderAll = () => {
@@ -1795,6 +2053,12 @@ document.addEventListener("click", (event) => {
     const joinGroupButton = event.target.closest("[data-join-group-id]");
     if (joinGroupButton) {
         handleGroupJoin(joinGroupButton);
+        return;
+    }
+
+    const removeLoaderButton = event.target.closest("[data-remove-loader-id]");
+    if (removeLoaderButton) {
+        handleRemoveLoader(removeLoaderButton);
         return;
     }
 
@@ -1868,16 +2132,20 @@ document.querySelectorAll("[name='authMode']").forEach((input) => {
 });
 el("logoutButton").addEventListener("click", () => {
     clearSession();
+    updateConnectionStatus();
     showLogin("Signed out.");
+    showToast("Signed out", "Your session has ended.");
 });
-el("seedButton").addEventListener("click", () => {
+el("seedButton").addEventListener("click", async () => {
     if (apiAvailable) {
-        loadFromApi();
+        await loadFromApi();
+        showToast("Data refreshed", "Latest records loaded from the database.");
         return;
     }
     state = seedState();
     setMessage(el("tripFormMessage"), "Sample data reloaded.", "success");
     setMessage(el("offenceMessage"), "", "");
+    showToast("Demo data reloaded", "Local sample data has been reset.");
     renderAll();
 });
 document.querySelectorAll("[data-open-trip]").forEach((button) => {
@@ -1892,5 +2160,10 @@ el("weightInput").value = 1000;
 el("distanceInput").value = 40;
 el("rateInput").value = state.config.baseRate;
 
+if (el("viewSubtitle")) {
+    el("viewSubtitle").textContent = viewSubtitles.dashboard;
+}
+
 renderAll();
 restoreSession();
+updateConnectionStatus();

@@ -266,6 +266,60 @@ def create_app():
         except Error as exc:
             return jsonify({"error": str(exc)}), 500
 
+    @app.delete("/api/trips/<int:trip_id>/loaders/<int:loader_id>")
+    @require_auth
+    @require_roles("system_admin", "ops_manager")
+    def remove_trip_loader(trip_id, loader_id):
+        try:
+            with get_connection() as conn:
+                conn.start_transaction()
+                try:
+                    with conn.cursor() as cursor:
+                        cursor.execute(
+                            "SELECT COUNT(*) FROM Trip WHERE trip_id = %s",
+                            (trip_id,),
+                        )
+                        if cursor.fetchone()[0] == 0:
+                            conn.rollback()
+                            return jsonify({"error": "Trip not found."}), 404
+
+                        cursor.execute(
+                            "SELECT COUNT(*) FROM TripLoader WHERE trip_id = %s",
+                            (trip_id,),
+                        )
+                        loader_total = cursor.fetchone()[0]
+
+                        cursor.execute(
+                            "SELECT COUNT(*) FROM TripLoader WHERE trip_id = %s AND loader_id = %s",
+                            (trip_id, loader_id),
+                        )
+                        if cursor.fetchone()[0] == 0:
+                            conn.rollback()
+                            return jsonify({"error": "That loader is not assigned to this trip."}), 404
+
+                        # Business rule: every trip must keep at least one loader.
+                        if loader_total <= 1:
+                            conn.rollback()
+                            return jsonify({"error": "A trip must keep at least one loader."}), 400
+
+                        cursor.execute(
+                            "DELETE FROM TripLoader WHERE trip_id = %s AND loader_id = %s",
+                            (trip_id, loader_id),
+                        )
+                    conn.commit()
+                    return jsonify(
+                        {
+                            "tripId": trip_id,
+                            "loaderId": loader_id,
+                            "state": load_bootstrap(conn, request.user),
+                        }
+                    )
+                except Error as exc:
+                    conn.rollback()
+                    return jsonify({"error": str(exc)}), 400
+        except Error as exc:
+            return jsonify({"error": str(exc)}), 500
+
     @app.post("/api/payments")
     @require_auth
     @require_roles("system_admin", "ops_manager", "accountant")
@@ -902,6 +956,9 @@ def load_bootstrap(conn, user=None):
                t.cargo_type AS cargoType,
                t.load_weight AS loadWeight,
                t.base_rate AS baseRate,
+               t.transport_cost AS transportCost,
+               t.tax_amount AS taxAmount,
+               t.total_cost AS totalCost,
                t.trip_status AS status,
                GROUP_CONCAT(DISTINCT tl.loader_id ORDER BY tl.loader_id) AS loader_ids
         FROM Trip t

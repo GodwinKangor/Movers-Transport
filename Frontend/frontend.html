@@ -7,15 +7,34 @@
     <link rel="stylesheet" href="frontend_styles.css">
 </head>
 <body>
+    <div class="loading-overlay auth-hidden" id="loadingOverlay" aria-hidden="true">
+        <div class="loading-spinner" role="status" aria-label="Loading"></div>
+        <p id="loadingText">Loading...</p>
+    </div>
+
+    <div class="toast-container" id="toastContainer" aria-live="polite" aria-atomic="true"></div>
+
+    <dialog class="confirm-dialog" id="confirmDialog">
+        <form method="dialog" class="confirm-dialog-body">
+            <h3 id="confirmTitle">Confirm action</h3>
+            <p id="confirmMessage"></p>
+            <div class="confirm-actions">
+                <button class="ghost-button" value="cancel" type="submit">Cancel</button>
+                <button class="primary-button danger-button" id="confirmAccept" value="confirm" type="submit">Confirm</button>
+            </div>
+        </form>
+    </dialog>
     <section class="auth-screen" id="authScreen">
         <section class="auth-panel">
             <div class="brand auth-brand">
                 <span class="brand-mark">MT</span>
                 <div>
                     <h1>Movers Transport</h1>
-                    <p>Choose your access point</p>
+                    <p>Agricultural transport operations console</p>
                 </div>
             </div>
+
+            <p class="auth-intro">Manage trips, fleet, farmers, payments, and driver discipline. Sign in with your role or create a new farmer account.</p>
 
             <div class="segmented-control auth-mode" role="tablist" aria-label="Authentication mode">
                 <label>
@@ -42,12 +61,14 @@
                 </label>
                 <label>
                     Username
-                    <input id="usernameInput" type="text" autocomplete="username" required placeholder="admin">
+                    <input id="usernameInput" type="text" autocomplete="username" required placeholder="test.admin">
                 </label>
                 <label>
                     Password
-                    <input id="passwordInput" type="password" autocomplete="current-password" required placeholder="password">
+                    <input id="passwordInput" type="password" autocomplete="current-password" required placeholder="password123">
                 </label>
+
+                <p class="demo-credentials">Demo accounts: use <strong>test.admin</strong> / <strong>password123</strong> with the matching role (see account_test_credentials.txt).</p>
 
                 <div id="loginMessage" class="form-message" aria-live="polite"></div>
                 <button class="primary-button full-width" type="submit"><span>→</span> Sign in</button>
@@ -104,17 +125,40 @@
             </div>
 
             <nav class="nav-tabs" aria-label="Workspace sections">
-                <button class="nav-tab active" data-view="dashboard" type="button">Dashboard</button>
-                <button class="nav-tab" data-view="trips" type="button">Trips</button>
-                <button class="nav-tab" data-view="fleet" type="button">Fleet</button>
-                <button class="nav-tab" data-view="farmers" type="button">Farmers</button>
-                <button class="nav-tab" data-view="discipline" type="button">Discipline</button>
-                <button class="nav-tab" data-view="users" type="button">Users</button>
+                <button class="nav-tab active" data-view="dashboard" type="button">
+                    <span class="nav-label">Dashboard</span>
+                    <span class="nav-hint">Overview &amp; metrics</span>
+                </button>
+                <button class="nav-tab" data-view="trips" type="button">
+                    <span class="nav-label">Trips</span>
+                    <span class="nav-hint">Schedule &amp; status</span>
+                </button>
+                <button class="nav-tab" data-view="fleet" type="button">
+                    <span class="nav-label">Fleet</span>
+                    <span class="nav-hint">Vehicles &amp; payroll</span>
+                </button>
+                <button class="nav-tab" data-view="farmers" type="button">
+                    <span class="nav-label">Farmers</span>
+                    <span class="nav-hint">Customers &amp; groups</span>
+                </button>
+                <button class="nav-tab" data-view="discipline" type="button">
+                    <span class="nav-label">Discipline</span>
+                    <span class="nav-hint">Offences &amp; HR</span>
+                </button>
+                <button class="nav-tab" data-view="users" type="button">
+                    <span class="nav-label">Users</span>
+                    <span class="nav-hint">Staff accounts</span>
+                </button>
             </nav>
 
-            <div class="sidebar-note">
-                <span class="status-dot"></span>
-                <span id="sidebarRole">Not signed in</span>
+            <div class="sidebar-footer">
+                <div class="sidebar-note" id="connectionStatus">
+                    <span class="status-dot" id="connectionDot"></span>
+                    <span id="connectionLabel">Checking connection...</span>
+                </div>
+                <div class="sidebar-note">
+                    <span id="sidebarRole">Not signed in</span>
+                </div>
             </div>
         </aside>
 
@@ -123,16 +167,23 @@
                 <div>
                     <p class="eyebrow">CS 61 database project</p>
                     <h2 id="viewTitle">Dashboard</h2>
+                    <p class="view-subtitle" id="viewSubtitle">Operations overview and business rule checks</p>
                 </div>
                 <div class="topbar-actions">
-                    <button class="icon-button" id="logoutButton" type="button" title="Sign out" aria-label="Sign out">L</button>
-                    <button class="icon-button" id="seedButton" type="button" title="Reload sample data" aria-label="Reload sample data">R</button>
-                    <button class="primary-button" data-open-trip type="button"><span>+</span> New trip</button>
+                    <button class="ghost-button" id="logoutButton" type="button">Sign out</button>
+                    <button class="ghost-button" id="seedButton" type="button">Refresh data</button>
+                    <button class="primary-button topbar-trip-button" data-open-trip type="button"><span>+</span> New trip</button>
                 </div>
             </header>
 
             <section class="view active" id="dashboardView" data-title="Dashboard">
                 <div class="driver-portal auth-hidden" id="driverPortal">
+                    <section class="demo-banner demo-banner-compact driver-banner">
+                        <div>
+                            <h3>Driver portal</h3>
+                            <p>View assigned trips and vehicle, record maintenance, and review your discipline history.</p>
+                        </div>
+                    </section>
                     <section class="panel">
                         <div class="panel-header">
                             <h3>My driver profile</h3>
@@ -200,7 +251,13 @@
                 </div>
 
                 <div class="hr-dashboard auth-hidden" id="hrDashboard">
-                    <div class="metric-grid" id="hrMetricGrid"></div>
+                    <section class="demo-banner demo-banner-compact" id="hrDemoBanner">
+                        <div>
+                            <h3>HR manager view</h3>
+                            <p>Monitor driver discipline, review offence history, and record new offences. Database triggers handle warnings and suspensions.</p>
+                        </div>
+                    </section>
+                    <div class="metric-grid metric-grid-6" id="hrMetricGrid"></div>
                     <div class="split-layout">
                         <div class="panel-stack">
                             <section class="panel">
@@ -241,6 +298,22 @@
                 </div>
 
                 <div id="defaultDashboard">
+                    <section class="demo-banner" id="demoBanner">
+                        <div>
+                            <h3>Agricultural transport management</h3>
+                            <p>Schedule cargo trips for farmers and cooperatives, assign drivers, vehicles, and loaders, track payments, and enforce database-backed business rules.</p>
+                        </div>
+                        <div class="entity-pills" aria-label="Core entities">
+                            <span class="entity-pill">Trips</span>
+                            <span class="entity-pill">Farmers</span>
+                            <span class="entity-pill">Groups</span>
+                            <span class="entity-pill">Vehicles</span>
+                            <span class="entity-pill">Drivers</span>
+                            <span class="entity-pill">Payments</span>
+                            <span class="entity-pill">Discipline</span>
+                        </div>
+                    </section>
+
                     <div class="metric-grid" id="metricGrid"></div>
 
                     <div class="split-layout">
@@ -255,6 +328,7 @@
                                     <option value="cancelled">Cancelled</option>
                                 </select>
                             </div>
+                            <p class="panel-hint">Select any row to open the full trip record on the Trips tab.</p>
                             <div class="table-wrap">
                                 <table>
                                     <thead>
@@ -275,7 +349,7 @@
                         <section class="panel">
                             <div class="panel-header">
                                 <h3>Rule checks</h3>
-                                <span class="muted-label">Frontend mirrors API checks</span>
+                                <span class="muted-label">Capacity, scheduling, and eligibility</span>
                             </div>
                             <div id="ruleList" class="rule-list"></div>
                         </section>
@@ -310,6 +384,7 @@
                             <label>
                                 Pickup date
                                 <input id="tripDate" type="date" required>
+                                <span class="field-hint">Must be at least 3 days from today</span>
                             </label>
                         </div>
 
@@ -317,6 +392,7 @@
                             <label>
                                 Delivery date
                                 <input id="deliveryDate" type="date" required>
+                                <span class="field-hint">Cannot be before pickup date</span>
                             </label>
                         </div>
 
@@ -367,6 +443,7 @@
                         <label>
                             Loaders
                             <select id="loaderSelect" multiple size="3"></select>
+                            <span class="field-hint">Select at least one loader. Hold Cmd on Mac or Ctrl on Windows to select multiple.</span>
                         </label>
 
                         <div class="cost-preview" aria-live="polite">
@@ -385,6 +462,7 @@
                         </div>
 
                         <div id="tripFormMessage" class="form-message" aria-live="polite"></div>
+                        <p class="role-notice" id="tripRoleNotice" aria-live="polite"></p>
                         <button class="primary-button full-width" type="submit"><span>+</span> Schedule trip</button>
                     </form>
 
@@ -439,6 +517,12 @@
 
             <section class="view" id="farmersView" data-title="Farmers">
                 <div class="farmer-portal auth-hidden" id="farmerPortal">
+                    <section class="demo-banner demo-banner-compact farmer-banner">
+                        <div>
+                            <h3>Farmer portal</h3>
+                            <p>Request transport, track payments, join or create farmer groups, and review completed trips.</p>
+                        </div>
+                    </section>
                     <section class="panel">
                         <div class="panel-header">
                             <h3>My profile</h3>
@@ -493,6 +577,7 @@
                         <label>
                             Trip
                             <select id="reviewTripSelect" required></select>
+                            <span class="field-hint">Reviews are currently available for individual farmer trips only.</span>
                         </label>
                         <div class="field-row">
                             <label>
@@ -557,7 +642,7 @@
                     <section class="panel">
                         <div class="panel-header">
                             <h3>Driver summary</h3>
-                            <span class="muted-label">Matches DriverDisciplineSummary</span>
+                            <span class="muted-label">Offence counts per driver</span>
                         </div>
                         <div id="disciplineList" class="stack-list"></div>
                     </section>
@@ -580,6 +665,7 @@
                             <input id="surchargeInput" type="number" min="0" step="0.01" value="0">
                         </label>
                         <div id="offenceMessage" class="form-message" aria-live="polite"></div>
+                        <p class="role-notice" id="offenceRoleNotice" aria-live="polite"></p>
                         <button class="primary-button full-width" type="submit"><span>!</span> Save offence</button>
                     </form>
                 </div>
