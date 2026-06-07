@@ -17,6 +17,8 @@ This document summarizes the main project changes made after the initial README 
 - Fixed the warning trigger table mismatch from `WarningLetters` to `WarningLetter`.
 - Added backend login protection for terminated drivers.
 - Added authenticated-request protection so a terminated driver is logged out on the next API request.
+- Added explicit HR/admin offence deletion with confirmation.
+- Kept warning, suspension, and termination records historical when an offence is deleted.
 - Verified the discipline trigger with rollback-only database tests.
 
 ## Farmer Group Trip Rules
@@ -67,6 +69,12 @@ This document summarizes the main project changes made after the initial README 
 - Added `POST /api/payments` for accountants, system admins, and operations managers.
 - Allowed partial customer payments while blocking overpayments and payments on cancelled trips.
 - Added trip-detail payment status, payment history, and a payment recording form for allowed roles.
+- Added ops/admin controls for driver salary-rate updates and loader rate updates.
+- Restricted employment termination to system admins; loader termination is supported when the schema includes `Loader.status`.
+- Added weight-based loader staffing minimums: 1 loader up to 1,000 kg, 2 loaders for 1,001-4,000 kg, and 3 loaders above 4,000 kg.
+- Prevented loader removal when it would put a trip below its weight-based staffing minimum.
+- Hid vehicle, driver, and loader assignment controls from farmer trip requests.
+- Added automatic resource assignment for farmer-created trips using available vehicles, active drivers, and available loaders.
 - Added backend pre-checks for overlapping driver, vehicle, and loader assignments across pickup/delivery ranges.
 - Filtered unavailable drivers, vehicles, and loaders after pickup/delivery date selection in the frontend.
 - Added a frontend rule check for overlapping assignments.

@@ -297,6 +297,33 @@
                     </div>
                 </div>
 
+                <div class="farmer-dashboard auth-hidden" id="farmerDashboard">
+                    <section class="demo-banner demo-banner-compact">
+                        <div>
+                            <h3>My transport account</h3>
+                            <p>Review your trip requests, payment balance, group status, and past-trip reviews.</p>
+                        </div>
+                    </section>
+                    <div class="metric-grid" id="farmerMetricGrid"></div>
+                    <div class="split-layout">
+                        <section class="panel">
+                            <div class="panel-header">
+                                <h3>My trip requests</h3>
+                                <button class="primary-button" data-open-trip type="button"><span>+</span> Request trip</button>
+                            </div>
+                            <div id="farmerDashboardTripList" class="stack-list"></div>
+                        </section>
+
+                        <section class="panel">
+                            <div class="panel-header">
+                                <h3>Group status</h3>
+                                <span class="muted-label" id="farmerDashboardGroupSummary"></span>
+                            </div>
+                            <div id="farmerDashboardGroupList" class="stack-list"></div>
+                        </section>
+                    </div>
+                </div>
+
                 <div id="defaultDashboard">
                     <section class="demo-banner" id="demoBanner">
                         <div>
@@ -429,7 +456,7 @@
                             </label>
                         </div>
 
-                        <div class="field-row">
+                        <div class="field-row" id="resourceAssignmentFields">
                             <label>
                                 Vehicle
                                 <select id="vehicleSelect" required></select>
@@ -440,11 +467,14 @@
                             </label>
                         </div>
 
-                        <label>
+                        <label id="loaderAssignmentField">
                             Loaders
                             <select id="loaderSelect" multiple size="3"></select>
-                            <span class="field-hint">Select at least one loader. Hold Cmd on Mac or Ctrl on Windows to select multiple.</span>
+                            <span class="field-hint">Loader minimums: up to 1,000 kg needs 1; 1,001-4,000 kg needs 2; over 4,000 kg needs 3. Hold Cmd on Mac or Ctrl on Windows to select multiple.</span>
                         </label>
+                        <div class="form-note auth-hidden" id="farmerAssignmentNotice">
+                            Operations will assign an available vehicle, driver, and loader team after you submit the request.
+                        </div>
 
                         <div class="cost-preview" aria-live="polite">
                             <div>
@@ -485,22 +515,34 @@
             </section>
 
             <section class="view" id="fleetView" data-title="Fleet">
-                <div class="panel">
+                <div class="panel fleet-panel">
                     <div class="panel-header">
                         <h3>Vehicles</h3>
-                        <label class="inline-filter">
-                            Minimum load
-                            <input id="capacityFilter" type="number" min="0" step="100" value="1000">
-                        </label>
+                        <div class="filter-controls">
+                            <label class="inline-filter">
+                                Search
+                                <input id="vehicleSearchInput" type="search" placeholder="Plate or type">
+                            </label>
+                            <label class="inline-filter">
+                                Minimum load
+                                <input id="capacityFilter" type="number" min="0" step="100" value="1000">
+                            </label>
+                        </div>
                     </div>
-                    <div id="vehicleGrid" class="fleet-grid"></div>
+                    <div id="vehicleGrid" class="fleet-grid fleet-scroll"></div>
                 </div>
 
-                <div class="split-layout payroll-panel auth-hidden" id="payrollPanel">
+                <div class="payroll-panel auth-hidden" id="payrollPanel">
                     <section class="panel">
                         <div class="panel-header">
                             <h3>Driver pay</h3>
-                            <span class="muted-label">Salary rates and trip assignments</span>
+                            <div class="filter-controls">
+                                <label class="inline-filter">
+                                    Search
+                                    <input id="driverSearchInput" type="search" placeholder="Driver name">
+                                </label>
+                                <span class="muted-label">Ops edits pay; admin terminates</span>
+                            </div>
                         </div>
                         <div id="driverPayList" class="stack-list"></div>
                     </section>
@@ -508,7 +550,13 @@
                     <section class="panel">
                         <div class="panel-header">
                             <h3>Loader pay</h3>
-                            <span class="muted-label">Rates and trip payments</span>
+                            <div class="filter-controls">
+                                <label class="inline-filter">
+                                    Search
+                                    <input id="loaderSearchInput" type="search" placeholder="Loader name">
+                                </label>
+                                <span class="muted-label">Ops edits rates; admin terminates</span>
+                            </div>
                         </div>
                         <div id="loaderPayList" class="stack-list"></div>
                     </section>

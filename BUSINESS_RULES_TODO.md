@@ -57,6 +57,44 @@ Implemented:
 - frontend: filter unavailable vehicles, drivers, and loaders after pickup/delivery date selection
 - frontend: rule checks flag overlapping driver, vehicle, or loader assignments
 
+## Loader Staffing
+
+Resolved scope:
+
+- Trips use weight-based loader staffing instead of a flat one-loader minimum.
+- Loads up to 1,000 kg require at least 1 loader.
+- Loads from 1,001 kg to 4,000 kg require at least 2 loaders.
+- Loads above 4,000 kg require at least 3 loaders.
+- Farmers do not choose loaders or see loader pay during trip requests.
+- Farmer-created trips are assigned available loaders automatically.
+
+Implemented:
+
+- `app.py`: validates required loader count before trip creation
+- `app.py`: auto-assigns required loaders for farmer-created trips
+- `app.py`: prevents removing loaders below the required count
+- frontend: validates selected loaders before submit
+- frontend: hides assignment controls from farmer trip requests
+- frontend: shows the loader staffing rule in the trip form and trip detail
+
+## Employment and Pay Management
+
+Resolved scope:
+
+- Operations managers and system admins can update driver salary rates.
+- Operations managers and system admins can update loader payment rates.
+- System admins can terminate driver employment.
+- Loader termination preserves historical trip records and requires a `Loader.status` column.
+
+Implemented:
+
+- `app.py`: added driver pay update endpoint
+- `app.py`: added loader pay update endpoint
+- `app.py`: added system-admin-only driver termination endpoint
+- `app.py`: added system-admin-only loader termination endpoint guarded by schema support
+- frontend: added editable payroll controls for ops/admin
+- frontend: keeps accountant payroll view read-only
+
 ## Small-Scale Farmer Group Onboarding
 
 Resolved scope:
@@ -121,6 +159,12 @@ Recommended enforcement:
 - In `app.py`, only allow HR/admin to edit offence details
 - Do not add delete/undo behavior unless the project specifically requires it
 - Current app behavior matches this scope.
+
+Implemented update:
+
+- HR/admin can explicitly delete an offence record.
+- Deleting an offence does not undo existing warning, suspension, or termination history.
+- Clearing the edit fields and pressing Save does not delete a record.
 
 ## 6. Admin User Management
 

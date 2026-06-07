@@ -155,8 +155,6 @@ def create_app():
     def create_trip():
         data = request.get_json(force=True)
         required = [
-            "vehicleId",
-            "driverId",
             "origin",
             "destination",
             "distanceKm",
@@ -164,21 +162,29 @@ def create_app():
             "deliveryDate",
             "cargoType",
             "loadWeight",
-            "loaders",
         ]
+        if request.user["role"] != "farmer":
+            required.extend(["vehicleId", "driverId", "loaders"])
         missing = [field for field in required if field not in data]
         if missing:
             return jsonify({"error": f"Missing fields: {', '.join(missing)}"}), 400
 
         farmer_id = data.get("farmerId")
         group_id = data.get("groupId")
-        loaders = data.get("loaders") or []
         data["baseRate"] = BASE_RATE
+        if request.user["role"] == "farmer":
+            data["vehicleId"] = None
+            data["driverId"] = None
+            loaders = []
+        else:
+            loaders = normalize_loader_ids(data.get("loaders") or [])
 
         if bool(farmer_id) == bool(group_id):
             return jsonify({"error": "Trip must use exactly one customer source."}), 400
-        if not loaders:
-            return jsonify({"error": "A trip must have at least one loader before completion."}), 400
+        if request.user["role"] != "farmer":
+            loader_error = validate_loader_count(data.get("loadWeight"), len(loaders))
+            if loader_error:
+                return jsonify({"error": loader_error}), 400
 
         try:
             with get_connection() as conn:
@@ -188,11 +194,6 @@ def create_app():
                     if date_error:
                         conn.rollback()
                         return jsonify({"error": date_error}), 400
-
-                    assignment_error = validate_trip_assignment(conn, data, loaders)
-                    if assignment_error:
-                        conn.rollback()
-                        return jsonify({"error": assignment_error}), 400
 
                     if farmer_id and farmer_type(conn, farmer_id) != "large_scale":
                         conn.rollback()
@@ -218,6 +219,18 @@ def create_app():
                                 conn.rollback()
                                 return jsonify({"error": "Only the group chair can request transport for a farmer group."}), 403
                             data["requestedByFarmerId"] = requester_id
+
+                    if request.user["role"] == "farmer":
+                        assignment_error = auto_assign_trip_resources(conn, data)
+                        if assignment_error:
+                            conn.rollback()
+                            return jsonify({"error": assignment_error}), 400
+                        loaders = data["loaders"]
+
+                    assignment_error = validate_trip_assignment(conn, data, loaders)
+                    if assignment_error:
+                        conn.rollback()
+                        return jsonify({"error": assignment_error}), 400
 
                     trip_id = insert_trip(conn, data)
                     insert_trip_loaders(conn, trip_id, loaders)
@@ -284,10 +297,20 @@ def create_app():
                             return jsonify({"error": "Trip not found."}), 404
 
                         cursor.execute(
-                            "SELECT COUNT(*) FROM TripLoader WHERE trip_id = %s",
+                            """
+                            SELECT t.load_weight, COUNT(tl.loader_id)
+                            FROM Trip t
+                            LEFT JOIN TripLoader tl ON t.trip_id = tl.trip_id
+                            WHERE t.trip_id = %s
+                            GROUP BY t.trip_id, t.load_weight
+                            """,
                             (trip_id,),
                         )
-                        loader_total = cursor.fetchone()[0]
+                        trip_row = cursor.fetchone()
+                        if not trip_row:
+                            conn.rollback()
+                            return jsonify({"error": "Trip not found."}), 404
+                        load_weight, loader_total = trip_row
 
                         cursor.execute(
                             "SELECT COUNT(*) FROM TripLoader WHERE trip_id = %s AND loader_id = %s",
@@ -297,10 +320,10 @@ def create_app():
                             conn.rollback()
                             return jsonify({"error": "That loader is not assigned to this trip."}), 404
 
-                        # Business rule: every trip must keep at least one loader.
-                        if loader_total <= 1:
+                        minimum_loaders = required_loader_count(load_weight)
+                        if loader_total - 1 < minimum_loaders:
                             conn.rollback()
-                            return jsonify({"error": "A trip must keep at least one loader."}), 400
+                            return jsonify({"error": f"This trip must keep at least {minimum_loaders} loader(s) for its load weight."}), 400
 
                         cursor.execute(
                             "DELETE FROM TripLoader WHERE trip_id = %s AND loader_id = %s",
@@ -365,6 +388,94 @@ def create_app():
         except Error as exc:
             return jsonify({"error": str(exc)}), 500
 
+    @app.patch("/api/drivers/<int:driver_id>/pay")
+    @require_auth
+    @require_roles("system_admin", "ops_manager")
+    def update_driver_pay(driver_id):
+        data = request.get_json(force=True)
+        pay_rate = parse_nonnegative_amount(data.get("salaryRate"), "Salary rate")
+        if isinstance(pay_rate, tuple):
+            return jsonify({"error": pay_rate[0]}), pay_rate[1]
+
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "UPDATE Driver SET salary_rate = %s WHERE driver_id = %s",
+                        (pay_rate, driver_id),
+                    )
+                    if cursor.rowcount == 0:
+                        conn.rollback()
+                        return jsonify({"error": "Driver not found."}), 404
+                conn.commit()
+                return jsonify({"driverId": driver_id, "state": load_bootstrap(conn, request.user)})
+        except Error as exc:
+            return jsonify({"error": str(exc)}), 400
+
+    @app.patch("/api/loaders/<int:loader_id>/pay")
+    @require_auth
+    @require_roles("system_admin", "ops_manager")
+    def update_loader_pay(loader_id):
+        data = request.get_json(force=True)
+        pay_rate = parse_nonnegative_amount(data.get("rate"), "Loader rate")
+        if isinstance(pay_rate, tuple):
+            return jsonify({"error": pay_rate[0]}), pay_rate[1]
+
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "UPDATE Loader SET payment_rate = %s WHERE loader_id = %s",
+                        (pay_rate, loader_id),
+                    )
+                    if cursor.rowcount == 0:
+                        conn.rollback()
+                        return jsonify({"error": "Loader not found."}), 404
+                conn.commit()
+                return jsonify({"loaderId": loader_id, "state": load_bootstrap(conn, request.user)})
+        except Error as exc:
+            return jsonify({"error": str(exc)}), 400
+
+    @app.patch("/api/drivers/<int:driver_id>/terminate")
+    @require_auth
+    @require_roles("system_admin")
+    def terminate_driver(driver_id):
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "UPDATE Driver SET status = 'terminated' WHERE driver_id = %s",
+                        (driver_id,),
+                    )
+                    if cursor.rowcount == 0:
+                        conn.rollback()
+                        return jsonify({"error": "Driver not found."}), 404
+                conn.commit()
+                return jsonify({"driverId": driver_id, "state": load_bootstrap(conn, request.user)})
+        except Error as exc:
+            return jsonify({"error": str(exc)}), 400
+
+    @app.patch("/api/loaders/<int:loader_id>/terminate")
+    @require_auth
+    @require_roles("system_admin")
+    def terminate_loader(loader_id):
+        try:
+            with get_connection() as conn:
+                if not table_has_column(conn, "Loader", "status"):
+                    return jsonify({"error": "Loader termination needs a Loader.status column so historical trip records are preserved."}), 400
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "UPDATE Loader SET status = 'terminated' WHERE loader_id = %s",
+                        (loader_id,),
+                    )
+                    if cursor.rowcount == 0:
+                        conn.rollback()
+                        return jsonify({"error": "Loader not found."}), 404
+                conn.commit()
+                return jsonify({"loaderId": loader_id, "state": load_bootstrap(conn, request.user)})
+        except Error as exc:
+            return jsonify({"error": str(exc)}), 400
+
     @app.post("/api/offences")
     @require_auth
     @require_roles("system_admin", "ops_manager", "hr_manager")
@@ -421,6 +532,25 @@ def create_app():
                         WHERE offence_id = %s
                         """,
                         (offence_type, surcharge, offence_id),
+                    )
+                    if cursor.rowcount == 0:
+                        conn.rollback()
+                        return jsonify({"error": "Offence not found."}), 404
+                conn.commit()
+                return jsonify({"offenceId": offence_id, "state": load_bootstrap(conn, request.user)})
+        except Error as exc:
+            return jsonify({"error": str(exc)}), 400
+
+    @app.delete("/api/offences/<int:offence_id>")
+    @require_auth
+    @require_roles("system_admin", "hr_manager")
+    def delete_offence(offence_id):
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "DELETE FROM Offence WHERE offence_id = %s",
+                        (offence_id,),
                     )
                     if cursor.rowcount == 0:
                         conn.rollback()
@@ -786,6 +916,16 @@ def public_user(user):
     }
 
 
+def parse_nonnegative_amount(value, label):
+    try:
+        amount = Decimal(str(value))
+    except Exception:
+        return (f"{label} must be a number.", 400)
+    if amount < 0:
+        return (f"{label} cannot be negative.", 400)
+    return amount
+
+
 def get_connection():
     return mysql.connector.connect(
         host=os.getenv("MOVERS_DB_HOST", "127.0.0.1"),
@@ -810,6 +950,21 @@ def normalize_row(row):
         else:
             normalized[key] = value
     return normalized
+
+
+def table_has_column(conn, table_name, column_name):
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT COUNT(*)
+            FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = %s
+              AND COLUMN_NAME = %s
+            """,
+            (table_name, column_name),
+        )
+        return cursor.fetchone()[0] > 0
 
 
 def load_bootstrap(conn, user=None):
@@ -871,12 +1026,15 @@ def load_bootstrap(conn, user=None):
         """,
     )
 
+    loader_status_supported = table_has_column(conn, "Loader", "status")
+    loader_status_select = "status" if loader_status_supported else "'active' AS status"
     loaders = fetch_all(
         conn,
-        """
+        f"""
         SELECT loader_id AS id,
                CONCAT(first_name, ' ', last_name) AS name,
-               payment_rate AS rate
+               payment_rate AS rate,
+               {loader_status_select}
         FROM Loader
         ORDER BY loader_id
         """,
@@ -1211,6 +1369,119 @@ def farmer_is_group_chair(conn, farmer_id, group_id):
         return cursor.fetchone()[0] > 0
 
 
+def normalize_loader_ids(loader_ids):
+    normalized = []
+    seen = set()
+    for loader_id in loader_ids:
+        try:
+            value = int(loader_id)
+        except (TypeError, ValueError):
+            continue
+        if value not in seen:
+            seen.add(value)
+            normalized.append(value)
+    return normalized
+
+
+def required_loader_count(load_weight):
+    try:
+        weight = Decimal(str(load_weight))
+    except Exception:
+        return 1
+    if weight <= Decimal("1000"):
+        return 1
+    if weight <= Decimal("4000"):
+        return 2
+    return 3
+
+
+def validate_loader_count(load_weight, loader_count):
+    minimum = required_loader_count(load_weight)
+    if loader_count < minimum:
+        return f"Load weight requires at least {minimum} loader(s)."
+    return ""
+
+
+def auto_assign_trip_resources(conn, data):
+    try:
+        load_weight = Decimal(str(data.get("loadWeight", 0)))
+    except Exception:
+        return "Load weight must be a number."
+
+    with conn.cursor(dictionary=True) as cursor:
+        cursor.execute(
+            """
+            SELECT vehicle_id, assigned_driver_id, load_capacity
+            FROM Vehicle
+            WHERE status = 'available'
+              AND load_capacity >= %s
+            ORDER BY load_capacity, vehicle_id
+            """,
+            (load_weight,),
+        )
+        vehicles = cursor.fetchall()
+
+        cursor.execute(
+            """
+            SELECT driver_id
+            FROM Driver
+            WHERE status = 'active'
+            ORDER BY driver_id
+            """
+        )
+        drivers = cursor.fetchall()
+
+        loader_status_filter = "WHERE status <> 'terminated'" if table_has_column(conn, "Loader", "status") else ""
+        cursor.execute(
+            f"""
+            SELECT loader_id
+            FROM Loader
+            {loader_status_filter}
+            ORDER BY loader_id
+            """
+        )
+        loaders = cursor.fetchall()
+
+    driver_ids = [driver["driver_id"] for driver in drivers]
+    for vehicle in vehicles:
+        candidate_driver_ids = (
+            [vehicle["assigned_driver_id"]]
+            if vehicle["assigned_driver_id"]
+            else driver_ids
+        )
+        for driver_id in candidate_driver_ids:
+            if driver_id not in driver_ids:
+                continue
+            if assignment_conflict(conn, data["tripDate"], data["deliveryDate"], driver_id=driver_id):
+                continue
+            if assignment_conflict(conn, data["tripDate"], data["deliveryDate"], vehicle_id=vehicle["vehicle_id"]):
+                continue
+            data["vehicleId"] = vehicle["vehicle_id"]
+            data["driverId"] = driver_id
+            break
+        if data.get("vehicleId") and data.get("driverId"):
+            break
+
+    if not data.get("vehicleId") or not data.get("driverId"):
+        return "No available driver and vehicle combination can cover this trip."
+
+    assigned_loaders = []
+    minimum_loaders = required_loader_count(load_weight)
+    for loader in loaders:
+        loader_id = loader["loader_id"]
+        if assignment_conflict(conn, data["tripDate"], data["deliveryDate"], loader_id=loader_id):
+            continue
+        assigned_loaders.append(loader_id)
+        if len(assigned_loaders) == minimum_loaders:
+            break
+
+    if len(assigned_loaders) < minimum_loaders:
+        return f"Load weight requires at least {minimum_loaders} available loader(s)."
+
+    data["loaders"] = assigned_loaders
+    return ""
+
+
 def farmer_is_group_member(conn, farmer_id, group_id):
     if not farmer_id or not group_id:
         return False
@@ -1323,11 +1594,25 @@ def validate_trip_assignment(conn, data, loader_ids):
         return f"Vehicle is already assigned to trip #{conflict} during those dates."
 
     for loader_id in loader_ids:
+        if loader_status_terminated(conn, loader_id):
+            return f"Loader {loader_id} is terminated and cannot be assigned."
         conflict = assignment_conflict(conn, data["tripDate"], data["deliveryDate"], loader_id=loader_id)
         if conflict:
             return f"Loader {loader_id} is already assigned to trip #{conflict} during those dates."
 
     return ""
+
+
+def loader_status_terminated(conn, loader_id):
+    if not table_has_column(conn, "Loader", "status"):
+        return False
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT status FROM Loader WHERE loader_id = %s",
+            (loader_id,),
+        )
+        row = cursor.fetchone()
+    return bool(row and row[0] == "terminated")
 
 
 def assignment_conflict(conn, pickup_date, delivery_date, driver_id=None, vehicle_id=None, loader_id=None):

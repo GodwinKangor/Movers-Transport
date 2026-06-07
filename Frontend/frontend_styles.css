@@ -448,6 +448,7 @@ select {
 
 .primary-button,
 .ghost-button,
+.danger-button,
 .icon-button {
     border: 0;
     border-radius: 8px;
@@ -486,6 +487,12 @@ select {
 }
 
 .danger-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 42px;
+    padding: 0 15px;
+    color: white;
     background: var(--red);
 }
 
@@ -538,6 +545,20 @@ select {
     gap: 14px;
 }
 
+.fleet-panel {
+    display: grid;
+    gap: 14px;
+}
+
+.fleet-scroll {
+    max-height: clamp(420px, 56vh, 720px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding-right: 6px;
+    padding-bottom: 2px;
+    scrollbar-gutter: stable;
+}
+
 .metric-card,
 .vehicle-card,
 .summary-card {
@@ -567,6 +588,12 @@ select {
     display: grid;
     grid-template-columns: minmax(0, 1.6fr) minmax(320px, 0.9fr);
     gap: 18px;
+}
+
+.payroll-panel {
+    display: grid;
+    gap: 18px;
+    margin-top: 18px;
 }
 
 .panel-stack {
@@ -765,6 +792,16 @@ tbody tr[data-trip-id] td:last-child {
     font-size: 0.76rem;
     font-weight: 500;
     line-height: 1.35;
+}
+
+.form-note {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 12px;
+    background: #fbfcfa;
+    color: var(--muted);
+    font-size: 0.86rem;
+    line-height: 1.4;
 }
 
 .panel-hint {
@@ -1044,8 +1081,19 @@ select[multiple] {
     gap: 8px;
 }
 
+.filter-controls {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 10px;
+}
+
 .inline-filter input {
-    width: 120px;
+    width: 150px;
+}
+
+.inline-filter input[type="search"] {
+    width: 190px;
 }
 
 .vehicle-card {
@@ -1138,12 +1186,41 @@ select[multiple] {
 
 .offence-edit-form {
     display: grid;
-    grid-template-columns: minmax(130px, 0.8fr) minmax(0, 1fr) 120px auto;
+    grid-template-columns: minmax(130px, 0.8fr) minmax(0, 1fr) 120px auto auto;
     align-items: end;
 }
 
-.offence-edit-form .primary-button {
+.offence-edit-form .primary-button,
+.offence-edit-form .danger-button {
     min-height: 40px;
+}
+
+.payroll-edit-form {
+    display: grid;
+    grid-template-columns: minmax(220px, 1fr) minmax(160px, 220px) minmax(240px, auto);
+    align-items: center;
+    justify-content: stretch;
+    width: 100%;
+    min-width: 0;
+}
+
+.payroll-edit-form > div,
+.payroll-edit-form label {
+    min-width: 0;
+}
+
+.payroll-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    min-width: 0;
+}
+
+.payroll-edit-form .primary-button,
+.payroll-edit-form .danger-button {
+    min-height: 40px;
+    min-width: 108px;
+    padding: 0 10px;
 }
 
 .vehicle-meta {
@@ -1261,8 +1338,18 @@ select[multiple] {
     .cost-preview,
     .profile-grid,
     .cost-ledger,
-    .offence-edit-form {
+    .offence-edit-form,
+    .payroll-edit-form {
         grid-template-columns: 1fr;
+    }
+
+    .payroll-actions {
+        justify-content: stretch;
+    }
+
+    .payroll-edit-form .primary-button,
+    .payroll-edit-form .danger-button {
+        flex: 1;
     }
 
     .cost-preview div + div {
@@ -1274,5 +1361,17 @@ select[multiple] {
     .list-item {
         align-items: flex-start;
         flex-direction: column;
+    }
+
+    .filter-controls,
+    .inline-filter,
+    .inline-filter input {
+        width: 100%;
+    }
+
+    .fleet-scroll {
+        max-height: none;
+        overflow: visible;
+        padding-right: 0;
     }
 }

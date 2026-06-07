@@ -9,8 +9,10 @@ farmer customers, payments, and driver discipline. The app code lives in the
 
 - Role-based login for system admins, ops managers, accountants, HR managers, drivers, and farmers
 - Farmers can sign up themselves; small-scale farmers join or start a group
-- Trip scheduling with cost, tax, and balance calculated automatically
+- Trip requests with cost, tax, and balance calculated automatically
+- Operations/admin users assign vehicles, drivers, and loaders; farmers do not choose operational staff
 - Fleet view with vehicle capacity, fuel, and maintenance info
+- Ops/admin pay-rate management, with system-admin-only employment termination for drivers/loaders
 - Driver portal for assignments, vehicle, service records, and discipline history
 - HR view for offences, warnings, and suspensions
 - Payments (including partial payments) and farmer reviews of drivers/loaders
@@ -22,13 +24,17 @@ Most of the rules are enforced in MySQL with triggers (see below).
 - Large-scale farmers request trips on their own; small-scale farmers go through a group
 - A group needs at least 5 members, and only the group chair can request a trip
 - Pickup date must be at least 3 days out, and delivery can't be before pickup
-- A trip needs one vehicle, one active driver, and at least one loader
+- A trip needs one vehicle, one active driver, and enough loaders for the load weight
+- Loader minimums are 1 loader up to 1,000 kg, 2 loaders for 1,001-4,000 kg, and 3 loaders above 4,000 kg
+- Farmer trip requests are auto-assigned to available vehicles, active drivers, and available loaders by the system
 - Vehicles must be `available`, and nothing can be double-booked on overlapping dates
 - Trip cost is computed by trigger from base rate, distance, weight, and tax
 - Status goes `scheduled -> in_progress -> completed` (or cancelled); completed/cancelled are final
 - Vehicle status flips to `in_transit` during a trip and back to `available` after
 - Payments can't exceed the remaining balance and can't be made on cancelled trips
 - Driver offences can lead to warnings, suspension, or termination; terminated drivers can't log in
+- Ops managers and system admins can update driver salary rates and loader rates.
+- Only system admins can terminate driver or loader employment.
 
 ## Database setup
 

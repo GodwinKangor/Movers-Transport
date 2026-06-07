@@ -28,9 +28,9 @@ const seedState = () => ({
         { id: 3, name: "Joseph Kamau", phone: "555-0203", status: "suspended", salaryRate: 26.50 }
     ],
     loaders: [
-        { id: 1, name: "Lena Owusu", rate: 18.00 },
-        { id: 2, name: "Noah Banda", rate: 18.00 },
-        { id: 3, name: "Ibrahim Sow", rate: 19.50 }
+        { id: 1, name: "Lena Owusu", rate: 18.00, status: "active" },
+        { id: 2, name: "Noah Banda", rate: 18.00, status: "active" },
+        { id: 3, name: "Ibrahim Sow", rate: 19.50, status: "active" }
     ],
     vehicles: [
         { id: 1, plate: "MV-1001", type: "pickup", size: "midsize", capacity: 1500, fuel: "diesel", status: "available", assignedDriverId: 1 },
@@ -405,6 +405,8 @@ const canRequestTransport = () => {
 const canUpdateTripStatus = () => ["system_admin", "ops_manager"].includes(currentUser?.role);
 const canRecordPayments = () => ["system_admin", "ops_manager", "accountant"].includes(currentUser?.role);
 const canRecordOffences = () => ["system_admin", "hr_manager", "ops_manager"].includes(currentUser?.role);
+const canManageEmployment = () => ["system_admin", "ops_manager"].includes(currentUser?.role);
+const canTerminateEmployment = () => currentUser?.role === "system_admin";
 const roleViews = {
     system_admin: ["dashboard", "trips", "fleet", "farmers", "discipline", "users"],
     ops_manager: ["dashboard", "trips", "fleet", "farmers", "discipline"],
@@ -436,6 +438,16 @@ const groupChairId = (group) => Number(group?.chairId || Object.entries(group?.m
 const farmerChairedGroups = () => state.groups.filter((group) => groupChairId(group) === currentUser?.farmerId);
 const tripPaymentTotal = (trip) => sum((trip.payments || []).map((payment) => payment.amount));
 const tripBalance = (trip) => Math.max(tripCost(trip).total - tripPaymentTotal(trip), 0);
+const requiredLoaderCount = (loadWeight) => {
+    const weight = Number(loadWeight) || 0;
+    if (weight <= 1000) return 1;
+    if (weight <= 4000) return 2;
+    return 3;
+};
+const loaderRequirementText = (loadWeight) => {
+    const required = requiredLoaderCount(loadWeight);
+    return `${Number(loadWeight).toLocaleString()} kg requires at least ${required} loader${required === 1 ? "" : "s"}.`;
+};
 const paymentStatus = (trip) => {
     const paid = tripPaymentTotal(trip);
     const total = tripCost(trip).total;
@@ -455,6 +467,37 @@ const activeTripConflicts = (trip, resourceType, resourceId) => {
         if (resourceType === "vehicle") return item.vehicleId === resourceId;
         return item.loaders.includes(resourceId);
     });
+};
+const autoAssignTripResources = (trip) => {
+    const vehicle = state.vehicles
+        .filter((item) => item.status === "available"
+            && item.capacity >= trip.loadWeight
+            && !activeTripConflicts(trip, "vehicle", item.id))
+        .sort((a, b) => a.capacity - b.capacity || a.id - b.id)
+        .find((item) => {
+            const candidateDrivers = item.assignedDriverId
+                ? state.drivers.filter((driver) => driver.id === item.assignedDriverId)
+                : state.drivers;
+            const driver = candidateDrivers.find((candidate) => candidate.status === "active"
+                && !activeTripConflicts(trip, "driver", candidate.id));
+            if (driver) {
+                trip.driverId = driver.id;
+                return true;
+            }
+            return false;
+        });
+    if (!vehicle) return "No available driver and vehicle combination can cover this trip.";
+    trip.vehicleId = vehicle.id;
+
+    const minimumLoaders = requiredLoaderCount(trip.loadWeight);
+    trip.loaders = state.loaders
+        .filter((loader) => loader.status !== "terminated" && !activeTripConflicts(trip, "loader", loader.id))
+        .slice(0, minimumLoaders)
+        .map((loader) => loader.id);
+    if (trip.loaders.length < minimumLoaders) {
+        return `Load weight requires at least ${minimumLoaders} available loader${minimumLoaders === 1 ? "" : "s"}.`;
+    }
+    return "";
 };
 const nextStatuses = (status) => ({
     scheduled: ["in_progress", "cancelled"],
@@ -483,12 +526,14 @@ const escapeAttr = (value) => String(value ?? "")
 const renderMetrics = () => {
     el("driverPortal").classList.toggle("auth-hidden", currentUser?.role !== "driver");
     el("hrDashboard").classList.toggle("auth-hidden", currentUser?.role !== "hr_manager");
-    el("defaultDashboard").classList.toggle("auth-hidden", ["driver", "hr_manager"].includes(currentUser?.role));
+    el("farmerDashboard").classList.toggle("auth-hidden", currentUser?.role !== "farmer");
+    el("defaultDashboard").classList.toggle("auth-hidden", ["driver", "hr_manager", "farmer"].includes(currentUser?.role));
     if (el("demoBanner")) {
         el("demoBanner").classList.toggle("auth-hidden", ["driver", "hr_manager", "farmer"].includes(currentUser?.role));
     }
     if (currentUser?.role === "driver") renderDriverPortal();
     if (currentUser?.role === "hr_manager") renderHrDashboard();
+    if (currentUser?.role === "farmer") renderFarmerDashboard();
 
     const outstanding = sum(state.trips.map((trip) => {
         const paid = sum(trip.payments.map((payment) => payment.amount));
@@ -510,6 +555,79 @@ const renderMetrics = () => {
             <strong>${value}</strong>
         </article>
     `).join("");
+};
+
+const farmerOwnedTrips = (farmerId) => state.trips.filter((trip) => (
+    trip.farmerId === farmerId || byId(state.groups, trip.groupId)?.members.includes(farmerId)
+));
+
+const renderFarmerDashboard = () => {
+    const farmer = byId(state.farmers, currentUser?.farmerId);
+    if (!farmer) {
+        el("farmerMetricGrid").innerHTML = "";
+        el("farmerDashboardTripList").innerHTML = renderEmptyState("No farmer profile", "This account is not linked to a farmer profile.", "F");
+        el("farmerDashboardGroupSummary").textContent = "";
+        el("farmerDashboardGroupList").innerHTML = "";
+        return;
+    }
+
+    const trips = farmerOwnedTrips(farmer.id);
+    const groups = state.groups.filter((group) => group.members.includes(farmer.id));
+    const totalDue = sum(trips.map((trip) => tripBalance(trip)));
+    const totalPaid = sum(trips.flatMap((trip) => trip.payments.map((payment) => payment.amount)));
+    const eligibleGroups = groups.filter((group) => group.members.length >= 5);
+    const reviews = state.reviews.filter((review) => review.farmerId === farmer.id);
+
+    el("farmerMetricGrid").innerHTML = [
+        ["Trip requests", trips.length],
+        ["Balance due", money.format(totalDue)],
+        ["Payments made", money.format(totalPaid)],
+        ["My groups", groups.length],
+        ["Reviews", reviews.length]
+    ].map(([label, value]) => `
+        <article class="metric-card">
+            <span>${label}</span>
+            <strong>${value}</strong>
+        </article>
+    `).join("");
+
+    el("farmerDashboardTripList").innerHTML = trips.length ? trips.map((trip) => {
+        const costs = tripCost(trip);
+        return `
+            <button class="list-item list-button ${selectedTripId === trip.id ? "selected" : ""}" data-trip-id="${trip.id}" type="button">
+                <div>
+                    <strong>#${trip.id} ${trip.origin} to ${trip.destination}</strong>
+                    <p>${tripDateRange(trip)} - ${trip.cargoType}, ${trip.loadWeight.toLocaleString()} kg</p>
+                    <p>${statusText(paymentStatus(trip))} - ${money.format(tripBalance(trip))} balance</p>
+                </div>
+                <div class="amount-stack">
+                    ${renderBadge(trip.status)}
+                    <strong>${money.format(costs.total)}</strong>
+                </div>
+            </button>
+        `;
+    }).join("") : renderEmptyState("No trip requests", "Use New trip to request transport.", "T");
+
+    el("farmerDashboardGroupSummary").textContent = farmer.type === "large_scale"
+        ? "Individual transport eligible"
+        : `${eligibleGroups.length} eligible`;
+    el("farmerDashboardGroupList").innerHTML = groups.length ? groups.map((group) => {
+        const chair = groupChairId(group) === farmer.id;
+        const eligible = group.members.length >= 5;
+        return `
+            <article class="list-item">
+                <div>
+                    <strong>${group.name}</strong>
+                    <p>${group.region} - ${group.members.length} members - ${chair ? "you are chair" : "member"}</p>
+                </div>
+                <span class="badge ${eligible ? "" : "warn"}">${eligible ? "eligible" : "needs members"}</span>
+            </article>
+        `;
+    }).join("") : renderEmptyState(
+        farmer.type === "large_scale" ? "No group membership" : "Join or create a group",
+        farmer.type === "large_scale" ? "Large-scale farmers can request individual transport." : "Small-scale farmers use groups for transport requests.",
+        "G"
+    );
 };
 
 const renderHrDashboard = () => {
@@ -620,6 +738,7 @@ const renderHrDriverDetail = () => {
                             <input name="surcharge" type="number" min="0" step="0.01" value="${offence.surcharge}">
                         </label>
                         <button class="primary-button" type="submit">Save</button>
+                        <button class="danger-button" data-delete-offence-id="${offence.id}" type="button">Delete</button>
                     </form>
                 `).join("") : renderEmptyState("No offences for this driver", "Offence records will appear here after they are logged.", "!")}
             </div>
@@ -811,7 +930,7 @@ const renderTripTable = () => {
 
 const renderRules = () => {
     const overloaded = state.trips.filter((trip) => trip.loadWeight > (getVehicle(trip.vehicleId)?.capacity || 0));
-    const loaderless = state.trips.filter((trip) => trip.loaders.length === 0);
+    const understaffedLoaders = state.trips.filter((trip) => trip.loaders.length < requiredLoaderCount(trip.loadWeight));
     const ineligibleGroups = state.groups.filter((group) => group.members.length < 5);
     const suspendedAssignments = state.trips.filter((trip) => byId(state.drivers, trip.driverId)?.status !== "active");
     const schedulingConflicts = state.trips.filter((trip, index) => state.trips.some((other, otherIndex) => {
@@ -824,7 +943,7 @@ const renderRules = () => {
 
     const rules = [
         { label: "Vehicle capacity", detail: overloaded.length ? `${overloaded.length} trips exceed capacity.` : "All scheduled loads fit selected vehicles.", tone: overloaded.length ? "danger" : "" },
-        { label: "Loader requirement", detail: loaderless.length ? `${loaderless.length} trips need at least one loader.` : "Every trip has a loader assigned.", tone: loaderless.length ? "warn" : "" },
+        { label: "Loader staffing", detail: understaffedLoaders.length ? `${understaffedLoaders.length} trips need more loaders for their load weight.` : "Trips meet loader staffing minimums.", tone: understaffedLoaders.length ? "warn" : "" },
         { label: "Group eligibility", detail: ineligibleGroups.length ? `${ineligibleGroups.length} groups have fewer than 5 members.` : "All groups can request transport.", tone: ineligibleGroups.length ? "warn" : "" },
         { label: "Driver status", detail: suspendedAssignments.length ? `${suspendedAssignments.length} trips use inactive drivers.` : "Trips use active drivers only.", tone: suspendedAssignments.length ? "danger" : "" },
         { label: "Scheduling conflicts", detail: schedulingConflicts.length ? `${schedulingConflicts.length} trips overlap on driver, vehicle, or loader.` : "Active assignments do not overlap.", tone: schedulingConflicts.length ? "danger" : "" }
@@ -878,7 +997,10 @@ const renderTripFormOptions = () => {
     });
     const availableVehicles = state.vehicles.filter((vehicle) => vehicle.status === "available" && !activeTripConflicts(null, "vehicle", vehicle.id));
     const activeDrivers = state.drivers.filter((driver) => driver.status === "active" && !activeTripConflicts(null, "driver", driver.id));
-    const availableLoaders = state.loaders.filter((loader) => !activeTripConflicts(null, "loader", loader.id));
+    const availableLoaders = state.loaders.filter((loader) => loader.status !== "terminated" && !activeTripConflicts(null, "loader", loader.id));
+    el("resourceAssignmentFields").classList.toggle("auth-hidden", farmerAccount);
+    el("loaderAssignmentField").classList.toggle("auth-hidden", farmerAccount);
+    el("farmerAssignmentNotice").classList.toggle("auth-hidden", !farmerAccount);
 
     renderOptions(
         el("vehicleSelect"),
@@ -956,18 +1078,19 @@ const tripDetailMarkup = (trip) => {
             </form>
         `
         : "";
+    const minimumLoaders = requiredLoaderCount(trip.loadWeight);
     const loaderManagement = canUpdateTripStatus()
         ? `
             <div class="detail-section">
                 <h4>Loaders</h4>
-                <p class="field-hint">Each trip must keep at least one loader.</p>
+                <p class="field-hint">${loaderRequirementText(trip.loadWeight)}</p>
                 <div class="stack-list">
                     ${trip.loaders.length ? trip.loaders.map((loaderId) => `
                         <article class="list-item">
                             <div><strong>${getLoaderName(loaderId)}</strong></div>
-                            ${trip.loaders.length > 1
+                            ${trip.loaders.length > minimumLoaders
                                 ? `<button class="ghost-button remove-loader-button" data-remove-loader-trip-id="${trip.id}" data-remove-loader-id="${loaderId}" type="button">Remove</button>`
-                                : `<span class="badge">last loader</span>`}
+                                : `<span class="badge">minimum reached</span>`}
                         </article>
                     `).join("") : renderEmptyState("No loaders assigned", "Loaders are assigned when the trip is created.", "L")}
                 </div>
@@ -1022,9 +1145,19 @@ const renderSelectedTripDetail = () => {
     el("tripDetail").innerHTML = tripDetailMarkup(trip);
 };
 
+const searchMatches = (query, values) => {
+    const normalized = query.trim().toLowerCase();
+    if (!normalized) return true;
+    return values.some((value) => String(value ?? "").toLowerCase().includes(normalized));
+};
+
 const renderFleet = () => {
     const minCapacity = Number(el("capacityFilter").value) || 0;
-    const vehicles = state.vehicles.filter((vehicle) => vehicle.capacity >= minCapacity);
+    const vehicleQuery = el("vehicleSearchInput").value;
+    const vehicles = state.vehicles.filter((vehicle) => (
+        vehicle.capacity >= minCapacity
+        && searchMatches(vehicleQuery, [vehicle.plate, vehicle.type, vehicle.size, vehicle.fuel, vehicle.status])
+    ));
     el("vehicleGrid").innerHTML = vehicles.length ? vehicles.map((vehicle) => {
         const driver = vehicle.assignedDriverId ? getDriverName(vehicle.assignedDriverId) : "No assigned driver";
         const badgeTone = vehicle.status === "available" ? "" : "warn";
@@ -1066,12 +1199,16 @@ const renderFleet = () => {
                 </div>
             </article>
         `;
-    }).join("") : renderEmptyState("No vehicles match this filter", "Lower the minimum load filter to see more vehicles.", "F");
+    }).join("") : renderEmptyState("No vehicles match", "Clear search or lower the minimum load filter.", "F");
     renderPayroll();
 };
 
 const renderPayroll = () => {
     const canSeePayroll = ["system_admin", "ops_manager", "accountant"].includes(currentUser?.role);
+    const canEditEmployment = canManageEmployment();
+    const canTerminate = canTerminateEmployment();
+    const driverQuery = el("driverSearchInput").value;
+    const loaderQuery = el("loaderSearchInput").value;
     el("payrollPanel").classList.toggle("auth-hidden", !canSeePayroll);
     if (!canSeePayroll) {
         el("driverPayList").innerHTML = "";
@@ -1079,9 +1216,29 @@ const renderPayroll = () => {
         return;
     }
 
-    el("driverPayList").innerHTML = state.drivers.map((driver) => {
+    const drivers = state.drivers.filter((driver) => searchMatches(driverQuery, [driver.name, driver.status, driver.phone]));
+    el("driverPayList").innerHTML = drivers.length ? drivers.map((driver) => {
         const assignedTrips = state.trips.filter((trip) => trip.driverId === driver.id);
-        return `
+        return canEditEmployment ? `
+            <form class="list-item payroll-edit-form" data-driver-pay-id="${driver.id}">
+                <div>
+                    <strong>${driver.name}</strong>
+                    <p>${assignedTrips.length} assigned trips - ${statusText(driver.status)}</p>
+                </div>
+                <label>
+                    Salary rate
+                    <input name="salaryRate" type="number" min="0" step="0.01" value="${driver.salaryRate}" required>
+                </label>
+                <div class="payroll-actions">
+                    <button class="primary-button" type="submit">Save</button>
+                    ${driver.status === "terminated"
+                        ? `<span class="badge danger">terminated</span>`
+                        : canTerminate
+                        ? `<button class="danger-button" data-terminate-driver-id="${driver.id}" type="button">Terminate</button>`
+                        : renderBadge(driver.status)}
+                </div>
+            </form>
+        ` : `
             <article class="list-item">
                 <div>
                     <strong>${driver.name}</strong>
@@ -1093,16 +1250,36 @@ const renderPayroll = () => {
                 </div>
             </article>
         `;
-    }).join("");
+    }).join("") : renderEmptyState("No drivers match", "Clear the driver search to see all drivers.", "D");
 
-    el("loaderPayList").innerHTML = state.loaders.map((loader) => {
+    const loaders = state.loaders.filter((loader) => searchMatches(loaderQuery, [loader.name, loader.status]));
+    el("loaderPayList").innerHTML = loaders.length ? loaders.map((loader) => {
         const payments = state.loaderPayments.filter((payment) => payment.loaderId === loader.id);
         const totalPaid = sum(payments.map((payment) => payment.amount));
-        return `
+        return canEditEmployment ? `
+            <form class="list-item payroll-edit-form" data-loader-pay-id="${loader.id}">
+                <div>
+                    <strong>${loader.name}</strong>
+                    <p>${payments.length} trip payments recorded - ${statusText(loader.status || "active")}</p>
+                </div>
+                <label>
+                    Loader rate
+                    <input name="rate" type="number" min="0" step="0.01" value="${loader.rate}" required>
+                </label>
+                <div class="payroll-actions">
+                    <button class="primary-button" type="submit">Save</button>
+                    ${(loader.status || "active") === "terminated"
+                        ? `<span class="badge danger">terminated</span>`
+                        : canTerminate
+                        ? `<button class="danger-button" data-terminate-loader-id="${loader.id}" type="button">Terminate</button>`
+                        : renderBadge(loader.status || "active")}
+                </div>
+            </form>
+        ` : `
             <article class="list-item">
                 <div>
                     <strong>${loader.name}</strong>
-                    <p>${payments.length} trip payments recorded</p>
+                    <p>${payments.length} trip payments recorded - ${statusText(loader.status || "active")}</p>
                 </div>
                 <div class="amount-stack">
                     <span>${money.format(loader.rate)} rate</span>
@@ -1110,7 +1287,7 @@ const renderPayroll = () => {
                 </div>
             </article>
         `;
-    }).join("");
+    }).join("") : renderEmptyState("No loaders match", "Clear the loader search to see all loaders.", "L");
 };
 
 const renderFarmers = () => {
@@ -1430,7 +1607,10 @@ const validateTrip = (trip) => {
     if (trip.loadWeight > vehicle.capacity) return "Trip load exceeds vehicle capacity.";
     if (!driver || driver.status !== "active") return "Driver must be active before trip assignment.";
     if (vehicle.assignedDriverId && vehicle.assignedDriverId !== driver.id) return "Trip driver must match the vehicle assigned driver.";
-    if (trip.loaders.length === 0) return "A trip must have at least one loader before completion.";
+    const minimumLoaders = requiredLoaderCount(trip.loadWeight);
+    if (trip.loaders.length < minimumLoaders) {
+        return `This load requires at least ${minimumLoaders} loader${minimumLoaders === 1 ? "" : "s"}.`;
+    }
     if (activeTripConflicts(trip, "driver", trip.driverId)) return "Driver is already assigned during those dates.";
     if (activeTripConflicts(trip, "vehicle", trip.vehicleId)) return "Vehicle is already assigned during those dates.";
     const busyLoader = trip.loaders.find((loaderId) => activeTripConflicts(trip, "loader", loaderId));
@@ -1441,12 +1621,15 @@ const validateTrip = (trip) => {
 const handleTripSubmit = async (event) => {
     event.preventDefault();
     const customerType = document.querySelector("[name='customerType']:checked").value;
-    const selectedLoaders = Array.from(el("loaderSelect").selectedOptions).map((option) => Number(option.value));
+    const farmerAccount = currentUser?.role === "farmer";
+    const selectedLoaders = farmerAccount
+        ? []
+        : Array.from(el("loaderSelect").selectedOptions).map((option) => Number(option.value));
     const selectedGroup = customerType === "group" ? byId(state.groups, el("customerSelect").value) : null;
     const trip = {
         id: nextId(state.trips),
-        vehicleId: Number(el("vehicleSelect").value),
-        driverId: Number(el("driverSelect").value),
+        vehicleId: farmerAccount ? null : Number(el("vehicleSelect").value),
+        driverId: farmerAccount ? null : Number(el("driverSelect").value),
         farmerId: customerType === "farmer" ? Number(el("customerSelect").value) : null,
         groupId: customerType === "group" ? Number(el("customerSelect").value) : null,
         origin: el("originInput").value.trim(),
@@ -1462,6 +1645,14 @@ const handleTripSubmit = async (event) => {
         loaders: selectedLoaders,
         payments: []
     };
+
+    if (farmerAccount) {
+        const assignmentError = autoAssignTripResources(trip);
+        if (assignmentError) {
+            setMessage(el("tripFormMessage"), assignmentError, "error");
+            return;
+        }
+    }
 
     const error = validateTrip(trip);
     if (error) {
@@ -1600,14 +1791,15 @@ const handleRemoveLoader = async (button) => {
     const loaderId = Number(button.dataset.removeLoaderId);
     const trip = byId(state.trips, tripId);
     if (!trip || !canUpdateTripStatus()) return;
-    if (trip.loaders.length <= 1) {
-        showToast("Cannot remove loader", "A trip must keep at least one loader.", "error");
+    const minimumLoaders = requiredLoaderCount(trip.loadWeight);
+    if (trip.loaders.length <= minimumLoaders) {
+        showToast("Cannot remove loader", `This load must keep at least ${minimumLoaders} loader${minimumLoaders === 1 ? "" : "s"}.`, "error");
         return;
     }
 
     const confirmed = await showConfirm({
         title: "Remove this loader?",
-        message: `Remove ${getLoaderName(loaderId)} from trip #${tripId}? A trip must keep at least one loader.`,
+        message: `Remove ${getLoaderName(loaderId)} from trip #${tripId}? ${loaderRequirementText(trip.loadWeight)}`,
         confirmLabel: "Remove loader",
         danger: true
     });
@@ -1678,7 +1870,10 @@ const handleOffenceUpdate = async (form) => {
     const offenceId = Number(form.dataset.offenceId);
     const type = form.elements.type.value.trim();
     const surcharge = Number(form.elements.surcharge.value) || 0;
-    if (!type) return;
+    if (!type) {
+        showToast("Type is required", "Use Delete if you want to remove this offence record.", "error");
+        return;
+    }
 
     if (apiAvailable) {
         try {
@@ -1701,6 +1896,157 @@ const handleOffenceUpdate = async (form) => {
         showToast("Offence updated", "Changes were saved in demo data.");
         renderAll();
     }
+};
+
+const handleOffenceDelete = async (button) => {
+    const offenceId = Number(button.dataset.deleteOffenceId);
+    const offence = byId(state.offences, offenceId);
+    if (!offence) return;
+
+    const confirmed = await showConfirm({
+        title: "Delete this offence?",
+        message: "This removes the offence record only. Existing warnings, suspensions, or terminations stay as historical records.",
+        confirmLabel: "Delete offence",
+        danger: true
+    });
+    if (!confirmed) return;
+
+    if (apiAvailable) {
+        try {
+            const payload = await withLoading("Deleting offence...", () => apiRequest(`/api/offences/${offenceId}`, {
+                method: "DELETE"
+            }));
+            replaceState(payload.state);
+            showToast("Offence deleted", "The offence record was removed.");
+        } catch (error) {
+            showToast("Could not delete offence", error.message, "error");
+        }
+        return;
+    }
+
+    state.offences = state.offences.filter((item) => item.id !== offenceId);
+    showToast("Offence deleted", "The offence record was removed from demo data.");
+    renderAll();
+};
+
+const handleDriverPayUpdate = async (form) => {
+    const driverId = Number(form.dataset.driverPayId);
+    const driver = byId(state.drivers, driverId);
+    const salaryRate = Number(form.elements.salaryRate.value);
+    if (!driver || !canManageEmployment()) return;
+    if (Number.isNaN(salaryRate) || salaryRate < 0) {
+        showToast("Invalid salary rate", "Salary rate cannot be negative.", "error");
+        return;
+    }
+
+    if (apiAvailable) {
+        try {
+            const payload = await withLoading("Updating driver pay...", () => apiRequest(`/api/drivers/${driverId}/pay`, {
+                method: "PATCH",
+                body: JSON.stringify({ salaryRate })
+            }));
+            replaceState(payload.state);
+            showToast("Driver pay updated", `${driver.name} now has a ${money.format(salaryRate)} salary rate.`);
+        } catch (error) {
+            showToast("Could not update driver pay", error.message, "error");
+        }
+        return;
+    }
+
+    driver.salaryRate = salaryRate;
+    showToast("Driver pay updated", `${driver.name} was updated in demo data.`);
+    renderAll();
+};
+
+const handleLoaderPayUpdate = async (form) => {
+    const loaderId = Number(form.dataset.loaderPayId);
+    const loader = byId(state.loaders, loaderId);
+    const rate = Number(form.elements.rate.value);
+    if (!loader || !canManageEmployment()) return;
+    if (Number.isNaN(rate) || rate < 0) {
+        showToast("Invalid loader rate", "Loader rate cannot be negative.", "error");
+        return;
+    }
+
+    if (apiAvailable) {
+        try {
+            const payload = await withLoading("Updating loader pay...", () => apiRequest(`/api/loaders/${loaderId}/pay`, {
+                method: "PATCH",
+                body: JSON.stringify({ rate })
+            }));
+            replaceState(payload.state);
+            showToast("Loader pay updated", `${loader.name} now has a ${money.format(rate)} rate.`);
+        } catch (error) {
+            showToast("Could not update loader pay", error.message, "error");
+        }
+        return;
+    }
+
+    loader.rate = rate;
+    showToast("Loader pay updated", `${loader.name} was updated in demo data.`);
+    renderAll();
+};
+
+const handleDriverTerminate = async (button) => {
+    const driverId = Number(button.dataset.terminateDriverId);
+    const driver = byId(state.drivers, driverId);
+    if (!driver || !canTerminateEmployment()) return;
+    const confirmed = await showConfirm({
+        title: "Terminate driver?",
+        message: `${driver.name} will no longer be able to log in or be assigned to trips.`,
+        confirmLabel: "Terminate",
+        danger: true
+    });
+    if (!confirmed) return;
+
+    if (apiAvailable) {
+        try {
+            const payload = await withLoading("Terminating driver...", () => apiRequest(`/api/drivers/${driverId}/terminate`, {
+                method: "PATCH",
+                body: JSON.stringify({})
+            }));
+            replaceState(payload.state);
+            showToast("Driver terminated", `${driver.name} is no longer employed.`);
+        } catch (error) {
+            showToast("Could not terminate driver", error.message, "error");
+        }
+        return;
+    }
+
+    driver.status = "terminated";
+    showToast("Driver terminated", `${driver.name} was marked terminated in demo data.`);
+    renderAll();
+};
+
+const handleLoaderTerminate = async (button) => {
+    const loaderId = Number(button.dataset.terminateLoaderId);
+    const loader = byId(state.loaders, loaderId);
+    if (!loader || !canTerminateEmployment()) return;
+    const confirmed = await showConfirm({
+        title: "Terminate loader?",
+        message: `${loader.name} will no longer be assigned to new trips. Historical trip records stay intact.`,
+        confirmLabel: "Terminate",
+        danger: true
+    });
+    if (!confirmed) return;
+
+    if (apiAvailable) {
+        try {
+            const payload = await withLoading("Terminating loader...", () => apiRequest(`/api/loaders/${loaderId}/terminate`, {
+                method: "PATCH",
+                body: JSON.stringify({})
+            }));
+            replaceState(payload.state);
+            showToast("Loader terminated", `${loader.name} is no longer employed.`);
+        } catch (error) {
+            showToast("Could not terminate loader", error.message, "error");
+        }
+        return;
+    }
+
+    loader.status = "terminated";
+    showToast("Loader terminated", `${loader.name} was marked terminated in demo data.`);
+    renderAll();
 };
 
 const handleServiceRecordSubmit = async (event) => {
@@ -1987,6 +2333,11 @@ const applyRoleAccess = () => {
     el("tripForm").querySelectorAll("input, select, button").forEach((field) => {
         field.disabled = !tripAllowed;
     });
+    if (currentUser?.role === "farmer") {
+        ["vehicleSelect", "driverSelect", "loaderSelect"].forEach((id) => {
+            el(id).disabled = true;
+        });
+    }
     el("offenceForm").querySelectorAll("input, select, button").forEach((field) => {
         field.disabled = !offenceAllowed;
     });
@@ -2043,6 +2394,9 @@ el("tripDate").addEventListener("change", () => {
 el("deliveryDate").addEventListener("change", renderTripFormOptions);
 el("tripStatusFilter").addEventListener("change", renderTripTable);
 el("capacityFilter").addEventListener("input", renderFleet);
+el("vehicleSearchInput").addEventListener("input", renderFleet);
+el("driverSearchInput").addEventListener("input", renderPayroll);
+el("loaderSearchInput").addEventListener("input", renderPayroll);
 el("tripForm").addEventListener("submit", handleTripSubmit);
 el("offenceForm").addEventListener("submit", handleOffenceSubmit);
 el("serviceRecordForm").addEventListener("submit", handleServiceRecordSubmit);
@@ -2059,6 +2413,24 @@ document.addEventListener("click", (event) => {
     const removeLoaderButton = event.target.closest("[data-remove-loader-id]");
     if (removeLoaderButton) {
         handleRemoveLoader(removeLoaderButton);
+        return;
+    }
+
+    const deleteOffenceButton = event.target.closest("[data-delete-offence-id]");
+    if (deleteOffenceButton) {
+        handleOffenceDelete(deleteOffenceButton);
+        return;
+    }
+
+    const terminateDriverButton = event.target.closest("[data-terminate-driver-id]");
+    if (terminateDriverButton) {
+        handleDriverTerminate(terminateDriverButton);
+        return;
+    }
+
+    const terminateLoaderButton = event.target.closest("[data-terminate-loader-id]");
+    if (terminateLoaderButton) {
+        handleLoaderTerminate(terminateLoaderButton);
         return;
     }
 
@@ -2090,6 +2462,20 @@ document.addEventListener("click", (event) => {
     }
 });
 document.addEventListener("submit", (event) => {
+    const driverPayForm = event.target.closest("[data-driver-pay-id]");
+    if (driverPayForm) {
+        event.preventDefault();
+        handleDriverPayUpdate(driverPayForm);
+        return;
+    }
+
+    const loaderPayForm = event.target.closest("[data-loader-pay-id]");
+    if (loaderPayForm) {
+        event.preventDefault();
+        handleLoaderPayUpdate(loaderPayForm);
+        return;
+    }
+
     const paymentForm = event.target.closest(".payment-form");
     if (paymentForm) {
         event.preventDefault();
