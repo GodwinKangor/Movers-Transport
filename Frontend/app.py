@@ -819,6 +819,38 @@ def create_app():
         except Error as exc:
             return jsonify({"error": str(exc)}), 500
 
+    @app.post("/api/loaders")
+    @require_auth
+    @require_roles("system_admin", "ops_manager")
+    def create_loader():
+        data = request.get_json(force=True)
+        required = ["firstName", "lastName", "phone", "rate"]
+        missing = [field for field in required if data.get(field) in (None, "")]
+        if missing:
+            return jsonify({"error": f"Missing fields: {', '.join(missing)}"}), 400
+
+        first_name = (data.get("firstName") or "").strip()
+        last_name = (data.get("lastName") or "").strip()
+        phone = (data.get("phone") or "").strip()
+        if not first_name or not last_name or not phone:
+            return jsonify({"error": "Loader name and phone cannot be blank."}), 400
+        pay_rate = parse_nonnegative_amount(data.get("rate"), "Loader rate")
+        if isinstance(pay_rate, tuple):
+            return jsonify({"error": pay_rate[0]}), pay_rate[1]
+
+        try:
+            with get_connection() as conn:
+                conn.start_transaction()
+                try:
+                    loader_id = insert_loader(conn, data, pay_rate)
+                    conn.commit()
+                    return jsonify({"loaderId": loader_id, "state": load_bootstrap(conn, request.user)}), 201
+                except Error as exc:
+                    conn.rollback()
+                    return jsonify({"error": str(exc)}), 400
+        except Error as exc:
+            return jsonify({"error": str(exc)}), 500
+
     @app.patch("/api/users/<int:user_id>/role")
     @require_auth
     @require_roles("system_admin")
@@ -1034,6 +1066,26 @@ def insert_vehicle(conn, plate, vehicle_type, capacity, fuel_type, status, drive
             VALUES (%s, %s, %s, %s, %s, %s)
             """,
             (plate, vehicle_type, capacity, fuel_type, status, driver_id),
+        )
+        return cursor.lastrowid
+
+
+def insert_loader(conn, data, payment_rate):
+    status_supported = table_has_column(conn, "Loader", "status")
+    status_column = ", status" if status_supported else ""
+    status_value = ", 'active'" if status_supported else ""
+    with conn.cursor() as cursor:
+        cursor.execute(
+            f"""
+            INSERT INTO Loader (first_name, last_name, phone, payment_rate{status_column})
+            VALUES (%s, %s, %s, %s{status_value})
+            """,
+            (
+                data["firstName"].strip(),
+                data["lastName"].strip(),
+                data["phone"].strip(),
+                payment_rate,
+            ),
         )
         return cursor.lastrowid
 

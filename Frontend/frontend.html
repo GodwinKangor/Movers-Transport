@@ -650,6 +650,30 @@
                                 <span class="muted-label">Availability, assignments, and pay access</span>
                             </div>
                         </div>
+                        <form class="roster-create-form auth-hidden" id="loaderCreateForm">
+                            <div class="field-row">
+                                <label>
+                                    First name
+                                    <input id="loaderFirstNameInput" type="text" required placeholder="Akosua">
+                                </label>
+                                <label>
+                                    Last name
+                                    <input id="loaderLastNameInput" type="text" required placeholder="Mensah">
+                                </label>
+                            </div>
+                            <div class="field-row">
+                                <label>
+                                    Phone
+                                    <input id="loaderPhoneInput" type="tel" required placeholder="555-0601">
+                                </label>
+                                <label>
+                                    Loader rate
+                                    <input id="loaderRateInput" type="number" min="0" step="0.01" required placeholder="18.00">
+                                </label>
+                            </div>
+                            <div id="loaderCreateMessage" class="form-message" aria-live="polite"></div>
+                            <button class="primary-button" type="submit"><span>+</span> Add loader</button>
+                        </form>
                         <div id="loaderPayList" class="stack-list"></div>
                     </section>
                 </div>

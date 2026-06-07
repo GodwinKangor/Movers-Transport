@@ -1230,6 +1230,10 @@ const renderPayroll = () => {
     if (!el("driverHireDateInput").value) {
         el("driverHireDateInput").value = today;
     }
+    el("loaderCreateForm").classList.toggle("auth-hidden", !canEditEmployment);
+    el("loaderCreateForm").querySelectorAll("input, button").forEach((field) => {
+        field.disabled = !canEditEmployment;
+    });
 
     const drivers = state.drivers.filter((driver) => searchMatches(driverQuery, [driver.name, driver.status, driver.phone]));
     el("driverPayList").innerHTML = drivers.length ? drivers.map((driver) => {
@@ -1270,7 +1274,7 @@ const renderPayroll = () => {
         `;
     }).join("") : renderEmptyState("No drivers match", "Clear the driver search to see all drivers.", "D");
 
-    const loaders = state.loaders.filter((loader) => searchMatches(loaderQuery, [loader.name, loader.status]));
+    const loaders = state.loaders.filter((loader) => searchMatches(loaderQuery, [loader.name, loader.phone, loader.status]));
     el("loaderPayList").innerHTML = loaders.length ? loaders.map((loader) => {
         const payments = state.loaderPayments.filter((payment) => payment.loaderId === loader.id);
         const totalPaid = sum(payments.map((payment) => payment.amount));
@@ -2096,6 +2100,62 @@ const handleDriverCreateSubmit = async (event) => {
     renderAll();
 };
 
+const handleLoaderCreateSubmit = async (event) => {
+    event.preventDefault();
+    if (!canManageEmployment()) {
+        setMessage(el("loaderCreateMessage"), "Only system admins and operations managers can add loaders.", "error");
+        return;
+    }
+
+    const rate = Number(el("loaderRateInput").value);
+    const loader = {
+        firstName: el("loaderFirstNameInput").value.trim(),
+        lastName: el("loaderLastNameInput").value.trim(),
+        phone: el("loaderPhoneInput").value.trim(),
+        rate
+    };
+    if (!loader.firstName || !loader.lastName || !loader.phone) {
+        setMessage(el("loaderCreateMessage"), "Loader name and phone are required.", "error");
+        return;
+    }
+    if (Number.isNaN(rate) || rate < 0) {
+        setMessage(el("loaderCreateMessage"), "Loader rate cannot be negative.", "error");
+        return;
+    }
+
+    if (apiAvailable) {
+        try {
+            const payload = await withLoading("Adding loader...", () => apiRequest("/api/loaders", {
+                method: "POST",
+                body: JSON.stringify(loader)
+            }));
+            replaceState(payload.state);
+            setMessage(el("loaderCreateMessage"), `Loader #${payload.loaderId} added.`, "success");
+            showToast("Loader added", `${loader.firstName} ${loader.lastName} is now in the loader roster.`);
+            event.target.reset();
+        } catch (error) {
+            setMessage(el("loaderCreateMessage"), error.message, "error");
+        }
+        return;
+    }
+
+    if (state.loaders.some((item) => item.name.toLowerCase() === `${loader.firstName} ${loader.lastName}`.toLowerCase())) {
+        setMessage(el("loaderCreateMessage"), "A loader with that name already exists.", "error");
+        return;
+    }
+    state.loaders.push({
+        id: nextId(state.loaders),
+        name: `${loader.firstName} ${loader.lastName}`,
+        phone: loader.phone,
+        rate,
+        status: "active"
+    });
+    setMessage(el("loaderCreateMessage"), "Loader added in demo data.", "success");
+    showToast("Loader added", `${loader.firstName} ${loader.lastName} is now in the loader roster.`);
+    event.target.reset();
+    renderAll();
+};
+
 const handleDriverPayUpdate = async (form) => {
     const driverId = Number(form.dataset.driverPayId);
     const driver = byId(state.drivers, driverId);
@@ -2588,6 +2648,7 @@ el("tripReviewForm").addEventListener("submit", handleTripReviewSubmit);
 el("groupCreateForm").addEventListener("submit", handleGroupCreateSubmit);
 el("vehicleCreateForm").addEventListener("submit", handleVehicleCreateSubmit);
 el("driverCreateForm").addEventListener("submit", handleDriverCreateSubmit);
+el("loaderCreateForm").addEventListener("submit", handleLoaderCreateSubmit);
 el("staffUserForm").addEventListener("submit", handleStaffUserSubmit);
 document.addEventListener("click", (event) => {
     const joinGroupButton = event.target.closest("[data-join-group-id]");
