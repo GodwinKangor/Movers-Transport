@@ -765,6 +765,60 @@ def create_app():
         except Error as exc:
             return jsonify({"error": str(exc)}), 500
 
+    @app.post("/api/vehicles")
+    @require_auth
+    @require_roles("system_admin", "ops_manager")
+    def create_vehicle():
+        data = request.get_json(force=True)
+        required = ["plate", "type", "capacity", "fuel", "status"]
+        missing = [field for field in required if data.get(field) in (None, "")]
+        if missing:
+            return jsonify({"error": f"Missing fields: {', '.join(missing)}"}), 400
+
+        plate = (data.get("plate") or "").strip().upper()
+        vehicle_type = (data.get("type") or "").strip()
+        fuel_type = (data.get("fuel") or "").strip()
+        status = (data.get("status") or "").strip()
+        if not plate:
+            return jsonify({"error": "Plate number cannot be blank."}), 400
+        if vehicle_type not in {"van", "pickup", "container_truck"}:
+            return jsonify({"error": "Vehicle type must be van, pickup, or container truck."}), 400
+        if fuel_type not in {"petrol", "diesel", "electric"}:
+            return jsonify({"error": "Fuel type must be petrol, diesel, or electric."}), 400
+        if status not in {"available", "assigned", "under_maintenance", "fueling", "out_of_service", "retired"}:
+            return jsonify({"error": "Vehicle status is not valid for a new vehicle."}), 400
+        try:
+            capacity = Decimal(str(data.get("capacity")))
+        except Exception:
+            return jsonify({"error": "Capacity must be a number."}), 400
+        if capacity <= 0:
+            return jsonify({"error": "Capacity must be greater than zero."}), 400
+
+        driver_id = data.get("assignedDriverId") or None
+        if driver_id:
+            try:
+                driver_id = int(driver_id)
+            except (TypeError, ValueError):
+                return jsonify({"error": "Assigned driver must be a valid driver."}), 400
+
+        try:
+            with get_connection() as conn:
+                conn.start_transaction()
+                try:
+                    if driver_id:
+                        driver_error = validate_vehicle_driver_assignment(conn, driver_id)
+                        if driver_error:
+                            conn.rollback()
+                            return jsonify({"error": driver_error}), 400
+                    vehicle_id = insert_vehicle(conn, plate, vehicle_type, capacity, fuel_type, status, driver_id)
+                    conn.commit()
+                    return jsonify({"vehicleId": vehicle_id, "state": load_bootstrap(conn, request.user)}), 201
+                except Error as exc:
+                    conn.rollback()
+                    return jsonify({"error": str(exc)}), 400
+        except Error as exc:
+            return jsonify({"error": str(exc)}), 500
+
     @app.patch("/api/users/<int:user_id>/role")
     @require_auth
     @require_roles("system_admin")
@@ -946,6 +1000,40 @@ def insert_driver(conn, data, hire_date, salary_rate):
                 hire_date,
                 salary_rate,
             ),
+        )
+        return cursor.lastrowid
+
+
+def validate_vehicle_driver_assignment(conn, driver_id):
+    with conn.cursor(dictionary=True) as cursor:
+        cursor.execute(
+            "SELECT status FROM Driver WHERE driver_id = %s",
+            (driver_id,),
+        )
+        driver = cursor.fetchone()
+        if not driver:
+            return "Assigned driver was not found."
+        if driver["status"] != "active":
+            return "Assigned driver must be active."
+
+        cursor.execute(
+            "SELECT vehicle_id FROM Vehicle WHERE assigned_driver_id = %s",
+            (driver_id,),
+        )
+        vehicle = cursor.fetchone()
+        if vehicle:
+            return "Assigned driver already has a vehicle."
+    return ""
+
+
+def insert_vehicle(conn, plate, vehicle_type, capacity, fuel_type, status, driver_id):
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            INSERT INTO Vehicle (plate_number, vehicle_type, load_capacity, fuel_type, status, assigned_driver_id)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            """,
+            (plate, vehicle_type, capacity, fuel_type, status, driver_id),
         )
         return cursor.lastrowid
 

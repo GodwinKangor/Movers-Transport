@@ -535,6 +535,54 @@
                             </label>
                         </div>
                     </div>
+                    <form class="roster-create-form auth-hidden" id="vehicleCreateForm">
+                        <div class="field-row">
+                            <label>
+                                Plate number
+                                <input id="vehiclePlateInput" type="text" required placeholder="MV-4011">
+                            </label>
+                            <label>
+                                Vehicle type
+                                <select id="vehicleTypeInput" required>
+                                    <option value="pickup">Pickup</option>
+                                    <option value="van">Van</option>
+                                    <option value="container_truck">Container truck</option>
+                                </select>
+                            </label>
+                        </div>
+                        <div class="field-row">
+                            <label>
+                                Capacity kg
+                                <input id="vehicleCapacityInput" type="number" min="1" step="1" required placeholder="1500">
+                            </label>
+                            <label>
+                                Fuel type
+                                <select id="vehicleFuelInput" required>
+                                    <option value="diesel">Diesel</option>
+                                    <option value="petrol">Petrol</option>
+                                    <option value="electric">Electric</option>
+                                </select>
+                            </label>
+                        </div>
+                        <div class="field-row">
+                            <label>
+                                Status
+                                <select id="vehicleStatusInput" required>
+                                    <option value="available">Available</option>
+                                    <option value="under_maintenance">Under maintenance</option>
+                                    <option value="fueling">Fueling</option>
+                                    <option value="out_of_service">Out of service</option>
+                                    <option value="retired">Retired</option>
+                                </select>
+                            </label>
+                            <label>
+                                Assigned driver
+                                <select id="vehicleDriverInput"></select>
+                            </label>
+                        </div>
+                        <div id="vehicleCreateMessage" class="form-message" aria-live="polite"></div>
+                        <button class="primary-button" type="submit"><span>+</span> Add vehicle</button>
+                    </form>
                     <div id="vehicleGrid" class="fleet-grid fleet-scroll"></div>
                 </div>
 

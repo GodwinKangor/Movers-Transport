@@ -407,6 +407,7 @@ const canUpdateTripStatus = () => ["system_admin", "ops_manager"].includes(curre
 const canRecordPayments = () => ["system_admin", "ops_manager", "accountant"].includes(currentUser?.role);
 const canRecordOffences = () => ["system_admin", "hr_manager", "ops_manager"].includes(currentUser?.role);
 const canManageEmployment = () => ["system_admin", "ops_manager"].includes(currentUser?.role);
+const canManageFleet = () => ["system_admin", "ops_manager"].includes(currentUser?.role);
 const canTerminateEmployment = () => currentUser?.role === "system_admin";
 const roleViews = {
     system_admin: ["dashboard", "trips", "fleet", "farmers", "discipline", "users"],
@@ -1155,6 +1156,18 @@ const searchMatches = (query, values) => {
 const renderFleet = () => {
     const minCapacity = Number(el("capacityFilter").value) || 0;
     const vehicleQuery = el("vehicleSearchInput").value;
+    const canCreateVehicle = canManageFleet();
+    const assignedDriverIds = new Set(state.vehicles.map((vehicle) => vehicle.assignedDriverId).filter(Boolean));
+    const availableDrivers = state.drivers.filter((driver) => driver.status === "active" && !assignedDriverIds.has(driver.id));
+    el("vehicleCreateForm").classList.toggle("auth-hidden", !canCreateVehicle);
+    el("vehicleCreateForm").querySelectorAll("input, select, button").forEach((field) => {
+        field.disabled = !canCreateVehicle;
+    });
+    el("vehicleDriverInput").innerHTML = `
+        <option value="">No assigned driver</option>
+        ${availableDrivers.map((driver) => `<option value="${driver.id}">${driver.name} - ${driver.phone}</option>`).join("")}
+    `;
+
     const vehicles = state.vehicles.filter((vehicle) => (
         vehicle.capacity >= minCapacity
         && searchMatches(vehicleQuery, [vehicle.plate, vehicle.type, vehicle.size, vehicle.fuel, vehicle.status])
@@ -1936,6 +1949,76 @@ const handleOffenceDelete = async (button) => {
     renderAll();
 };
 
+const handleVehicleCreateSubmit = async (event) => {
+    event.preventDefault();
+    if (!canManageFleet()) {
+        setMessage(el("vehicleCreateMessage"), "Only system admins and operations managers can add vehicles.", "error");
+        return;
+    }
+
+    const capacity = Number(el("vehicleCapacityInput").value);
+    const assignedDriverId = el("vehicleDriverInput").value ? Number(el("vehicleDriverInput").value) : null;
+    const vehicle = {
+        plate: el("vehiclePlateInput").value.trim().toUpperCase(),
+        type: el("vehicleTypeInput").value,
+        capacity,
+        fuel: el("vehicleFuelInput").value,
+        status: el("vehicleStatusInput").value,
+        assignedDriverId
+    };
+    if (!vehicle.plate || !vehicle.type || !vehicle.fuel || !vehicle.status) {
+        setMessage(el("vehicleCreateMessage"), "Plate, type, fuel, and status are required.", "error");
+        return;
+    }
+    if (Number.isNaN(capacity) || capacity <= 0) {
+        setMessage(el("vehicleCreateMessage"), "Capacity must be greater than zero.", "error");
+        return;
+    }
+    if (assignedDriverId && !byId(state.drivers, assignedDriverId)) {
+        setMessage(el("vehicleCreateMessage"), "Choose a valid driver.", "error");
+        return;
+    }
+
+    if (apiAvailable) {
+        try {
+            const payload = await withLoading("Adding vehicle...", () => apiRequest("/api/vehicles", {
+                method: "POST",
+                body: JSON.stringify(vehicle)
+            }));
+            replaceState(payload.state);
+            setMessage(el("vehicleCreateMessage"), `Vehicle #${payload.vehicleId} added.`, "success");
+            showToast("Vehicle added", `${vehicle.plate} is now in the fleet.`);
+            event.target.reset();
+        } catch (error) {
+            setMessage(el("vehicleCreateMessage"), error.message, "error");
+        }
+        return;
+    }
+
+    if (state.vehicles.some((item) => item.plate.toLowerCase() === vehicle.plate.toLowerCase())) {
+        setMessage(el("vehicleCreateMessage"), "Plate number is already in use.", "error");
+        return;
+    }
+    if (assignedDriverId && state.vehicles.some((item) => item.assignedDriverId === assignedDriverId)) {
+        setMessage(el("vehicleCreateMessage"), "Assigned driver already has a vehicle.", "error");
+        return;
+    }
+    state.vehicles.push({
+        id: nextId(state.vehicles),
+        plate: vehicle.plate,
+        type: vehicle.type,
+        size: vehicle.type,
+        capacity,
+        fuel: vehicle.fuel,
+        status: vehicle.status,
+        assignedDriverId
+    });
+    setMessage(el("vehicleCreateMessage"), "Vehicle added in demo data.", "success");
+    showToast("Vehicle added", `${vehicle.plate} is now in the fleet.`);
+    event.target.reset();
+    renderAll();
+};
+
 const handleDriverCreateSubmit = async (event) => {
     event.preventDefault();
     if (!canManageEmployment()) {
@@ -2503,6 +2586,7 @@ el("offenceForm").addEventListener("submit", handleOffenceSubmit);
 el("serviceRecordForm").addEventListener("submit", handleServiceRecordSubmit);
 el("tripReviewForm").addEventListener("submit", handleTripReviewSubmit);
 el("groupCreateForm").addEventListener("submit", handleGroupCreateSubmit);
+el("vehicleCreateForm").addEventListener("submit", handleVehicleCreateSubmit);
 el("driverCreateForm").addEventListener("submit", handleDriverCreateSubmit);
 el("staffUserForm").addEventListener("submit", handleStaffUserSubmit);
 document.addEventListener("click", (event) => {
